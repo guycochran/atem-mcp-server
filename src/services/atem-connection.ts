@@ -7,31 +7,46 @@ let connectPromise: Promise<string> | null = null;
 // ---------------------------------------------------------------------------
 // Audio level tracking — maintains a rolling window of recent audio levels
 // per input so we can detect which inputs are "active" (someone speaking).
+//
+// Speech audio is very bursty: a speaker might swing from -10 dB to -80 dB
+// between words. To reliably detect who is speaking, we keep a sliding window
+// of recent samples and compute a smoothed level (exponential moving average)
+// that represents sustained speech energy rather than instantaneous peaks.
 // ---------------------------------------------------------------------------
 
+/** How many samples to keep per input for the sliding window */
+const SAMPLE_WINDOW_SIZE = 12; // ~6 seconds at ~2 samples/sec from ATEM
+
+/** How long (ms) before level data is considered stale */
+const LEVEL_WINDOW_MS = 5000;
+
+/**
+ * Minimum smoothed audio level to consider an input "active".
+ * The ATEM Fairlight mixer reports levels in hundredths of dB:
+ *   -10000 = -100 dB = silence, -2000 = -20 dB = normal speech.
+ * Threshold of -5000 (-50 dB) filters out ambient noise.
+ */
+const SILENCE_THRESHOLD = -5000;
+
 interface InputAudioLevel {
-  /** Maximum of left/right output levels seen in the recent window (internal units, higher = louder) */
+  /** Recent level samples (newest last) for computing average */
+  samples: number[];
+  /** Smoothed level (exponential moving average of recent samples) */
+  smoothedLevel: number;
+  /** Most recent instantaneous peak */
   recentPeak: number;
   /** Timestamp of last update */
   lastUpdate: number;
 }
 
-/** Map of input index → recent audio level info */
+/** Map of input index → audio level tracking data */
 const audioLevels = new Map<number, InputAudioLevel>();
-
-/** How long (ms) to keep level data before it's considered stale */
-const LEVEL_WINDOW_MS = 3000;
-
-/**
- * Minimum audio level to consider an input "active" (i.e., someone is speaking).
- * The ATEM Fairlight mixer reports levels in hundredths of dB: -10000 = -100.00 dB = silence.
- * A reasonable speech threshold is around -60 dB (-6000) — anything below this is
- * background noise or silence and should not trigger speaker detection.
- */
-const SILENCE_THRESHOLD = -6000;
 
 /** Whether we're currently receiving level data from the ATEM */
 let levelTrackingActive = false;
+
+/** EMA smoothing factor — 0.3 gives good responsiveness while smoothing bursts */
+const EMA_ALPHA = 0.3;
 
 /**
  * Start listening for audio level events from the ATEM.
@@ -46,7 +61,26 @@ export async function startAudioLevelTracking(): Promise<void> {
       const levels = levelData.levels;
       // Use the maximum of left/right output levels as a proxy for "how loud"
       const peak = Math.max(levels.outputLeftLevel, levels.outputRightLevel);
-      audioLevels.set(inputIndex, { recentPeak: peak, lastUpdate: Date.now() });
+
+      const existing = audioLevels.get(inputIndex);
+      if (existing) {
+        // Add sample to sliding window
+        existing.samples.push(peak);
+        if (existing.samples.length > SAMPLE_WINDOW_SIZE) {
+          existing.samples.shift();
+        }
+        // Update exponential moving average
+        existing.smoothedLevel = EMA_ALPHA * peak + (1 - EMA_ALPHA) * existing.smoothedLevel;
+        existing.recentPeak = peak;
+        existing.lastUpdate = Date.now();
+      } else {
+        audioLevels.set(inputIndex, {
+          samples: [peak],
+          smoothedLevel: peak,
+          recentPeak: peak,
+          lastUpdate: Date.now(),
+        });
+      }
     }
   });
 
@@ -61,14 +95,12 @@ export async function startAudioLevelTracking(): Promise<void> {
 
 /**
  * Get inputs sorted by recent audio activity (loudest first).
+ * Uses smoothed (EMA) levels to avoid switching on brief spikes or dips.
  * Filters out stale entries, silent inputs, and inputs not in the candidate list.
  *
- * Only returns inputs whose audio level exceeds the silence threshold — this
- * prevents "phantom" speaker detection when all inputs are quiet.
- *
  * @param candidateInputs - only consider these input IDs (e.g., guest cameras)
- * @param includeAll - if true, include all candidates even silent ones (for diagnostics). Default false.
- * @returns Array of { input, level } sorted by level descending (loudest first)
+ * @param includeAll - if true, include all candidates even silent ones (for diagnostics)
+ * @returns Array of { input, level } sorted by smoothed level descending (loudest first)
  */
 export function getActiveInputsByAudioLevel(
   candidateInputs?: number[],
@@ -83,8 +115,8 @@ export function getActiveInputsByAudioLevel(
     // Skip if not in candidate list
     if (candidateInputs && !candidateInputs.includes(input)) continue;
     // Skip silent inputs (below threshold) unless includeAll is set
-    if (!includeAll && data.recentPeak <= SILENCE_THRESHOLD) continue;
-    results.push({ input, level: data.recentPeak });
+    if (!includeAll && data.smoothedLevel <= SILENCE_THRESHOLD) continue;
+    results.push({ input, level: data.smoothedLevel });
   }
 
   // Sort by level descending (loudest first)
@@ -102,22 +134,34 @@ export function isLevelTrackingActive(): boolean {
 // ---------------------------------------------------------------------------
 // Auto-switch engine — continuously switches to the active speaker
 // ---------------------------------------------------------------------------
+//
+// Zoom-style fast switching with anti-bounce protection:
+//
+//   1. Fast detection — uses instantaneous peaks to detect a new speaker
+//      immediately when they start talking
+//   2. Short hold — confirm the new speaker for just ~1s (avoids coughs/noise)
+//   3. Cooldown — after switching, brief pause to prevent ping-pong
+//   4. Current-speaker stickiness — the current speaker's smoothed (EMA) level
+//      is used so brief pauses between words don't cause a switch away
+//   5. New speaker uses instantaneous peak — so we detect them starting to
+//      talk right away, not after the EMA ramps up
+// ---------------------------------------------------------------------------
 
 interface AutoSwitchState {
   /** setInterval handle */
   timer: ReturnType<typeof setInterval>;
-  /** Guest inputs to consider */
+  /** Inputs to consider */
   candidates: number[];
-  /** Host input to exclude */
+  /** Host input (informational — 0 means no host exclusion) */
   hostInput: number;
   /** Current speaker on program (avoid redundant switches) */
   currentSpeaker: number | null;
-  /** Timestamp when currentSpeaker became loudest (for hold logic) */
-  speakerSince: number;
-  /** Minimum ms a new speaker must be loudest before we switch */
+  /** Minimum ms a new speaker must be dominant before we switch */
   holdMs: number;
   /** How often we check levels (ms) */
   intervalMs: number;
+  /** Minimum ms between switches (cooldown) */
+  cooldownMs: number;
   /** Mix Effect bus */
   me: number;
   /** Transition type */
@@ -126,9 +170,37 @@ interface AutoSwitchState {
   switchCount: number;
   /** When auto-switch was started */
   startedAt: number;
+  /** Timestamp of last switch (for cooldown) */
+  lastSwitchAt: number;
+  /** Mode: 'program' switches program input, 'ssrc_box' switches a Super Source box source, 'host_ssrc' switches between host full-screen and Super Source with active guest */
+  mode: 'program' | 'ssrc_box' | 'host_ssrc';
+  /** Which Super Source box to update (0-3) — only used in ssrc_box mode */
+  ssrcBox: number;
+  /** Super Source ID (default 0) — only used in ssrc_box mode */
+  ssrcId: number;
 }
 
 let autoSwitch: AutoSwitchState | null = null;
+
+/**
+ * Get the instantaneous peak level for an input (not smoothed).
+ * Used by auto-switch to detect new speakers immediately.
+ */
+function getInstantaneousPeak(inputIndex: number): number {
+  const data = audioLevels.get(inputIndex);
+  if (!data || Date.now() - data.lastUpdate > LEVEL_WINDOW_MS) return -10000;
+  return data.recentPeak;
+}
+
+/**
+ * Get the smoothed (EMA) level for an input.
+ * Used by auto-switch to check if the current speaker is still active.
+ */
+function getSmoothedLevel(inputIndex: number): number {
+  const data = audioLevels.get(inputIndex);
+  if (!data || Date.now() - data.lastUpdate > LEVEL_WINDOW_MS) return -10000;
+  return data.smoothedLevel;
+}
 
 /**
  * Start auto-switching to the active speaker.
@@ -139,8 +211,12 @@ export function startAutoSwitch(options: {
   hostInput?: number;
   holdMs?: number;
   intervalMs?: number;
+  cooldownMs?: number;
   me?: number;
   transition?: 'cut' | 'auto';
+  mode?: 'program' | 'ssrc_box' | 'host_ssrc';
+  ssrcBox?: number;
+  ssrcId?: number;
 }): string {
   if (autoSwitch) {
     return 'Auto-switch is already running. Stop it first with atem_auto_switch_off.';
@@ -155,13 +231,23 @@ export function startAutoSwitch(options: {
   }
 
   const host = options.hostInput ?? 7;
-  const candidates = options.candidates ?? [1, 2, 3, 4, 5, 6, 7, 8].filter(i => i !== host);
-  const holdMs = options.holdMs ?? 1500;
-  const intervalMs = options.intervalMs ?? 500;
+  const mode = options.mode ?? 'program';
+  // In host_ssrc mode, we monitor ALL inputs including the host so we can
+  // detect when the host is speaking vs a guest.
+  const candidates = options.candidates ?? (
+    mode === 'host_ssrc'
+      ? [1, 2, 3, 4, 5, 6, 7, 8]  // include host in candidates for host_ssrc
+      : [1, 2, 3, 4, 5, 6, 7, 8].filter(i => i !== host)
+  );
+  const holdMs = options.holdMs ?? 1000;
+  const intervalMs = options.intervalMs ?? 250;
+  const cooldownMs = options.cooldownMs ?? 2000;
   const me = options.me ?? 0;
   const transition = options.transition ?? 'cut';
+  const ssrcBox = options.ssrcBox ?? 1;  // default box 2 (0-indexed)
+  const ssrcId = options.ssrcId ?? 0;
 
-  // Track which candidate is currently loudest and for how long
+  // Track which candidate is building up as a potential switch target
   let pendingSpeaker: number | null = null;
   let pendingSince = 0;
 
@@ -170,60 +256,134 @@ export function startAutoSwitch(options: {
     candidates,
     hostInput: host,
     currentSpeaker: null,
-    speakerSince: Date.now(),
     holdMs,
     intervalMs,
+    cooldownMs,
     me,
     transition,
     switchCount: 0,
     startedAt: Date.now(),
+    lastSwitchAt: 0,
+    mode,
+    ssrcBox,
+    ssrcId,
   };
 
   state.timer = setInterval(() => {
     if (!atemInstance || !isConnected) return;
 
-    const active = getActiveInputsByAudioLevel(candidates);
-    if (active.length === 0) return;
+    const now = Date.now();
 
-    const loudest = active[0].input;
+    // Cooldown: don't consider switching if we just switched
+    if (state.lastSwitchAt > 0 && now - state.lastSwitchAt < cooldownMs) return;
 
-    // If loudest speaker is the same as current program, nothing to do
-    if (loudest === state.currentSpeaker) {
+    // Find the loudest candidate by INSTANTANEOUS peak (fast detection)
+    let loudestInput: number | null = null;
+    let loudestPeak = SILENCE_THRESHOLD;
+
+    for (const c of candidates) {
+      const peak = getInstantaneousPeak(c);
+      if (peak > loudestPeak) {
+        loudestPeak = peak;
+        loudestInput = c;
+      }
+    }
+
+    // Nobody speaking above threshold — do nothing, keep current camera
+    if (loudestInput === null) {
       pendingSpeaker = null;
       return;
     }
 
-    // New speaker detected — start hold timer
-    if (loudest !== pendingSpeaker) {
-      pendingSpeaker = loudest;
-      pendingSince = Date.now();
+    // If loudest is already the current speaker — great, reset pending
+    if (loudestInput === state.currentSpeaker) {
+      pendingSpeaker = null;
       return;
     }
 
-    // Same new speaker is still loudest — check if hold time has elapsed
-    if (Date.now() - pendingSince >= holdMs) {
+    // Check if current speaker is still actively speaking (using smoothed level).
+    // If the current speaker's smoothed level is above threshold and the new
+    // speaker's peak isn't meaningfully louder, stay with the current speaker.
+    // This prevents switching away during brief pauses between words.
+    if (state.currentSpeaker !== null) {
+      const currentSmoothed = getSmoothedLevel(state.currentSpeaker);
+      if (currentSmoothed > SILENCE_THRESHOLD) {
+        // Current speaker still active — new speaker needs to be louder
+        // by at least 2 dB (instantaneous peak vs current smoothed)
+        if (loudestPeak - currentSmoothed < 200) {
+          pendingSpeaker = null;
+          return;
+        }
+      }
+    }
+
+    // New dominant speaker detected — start or continue hold timer
+    if (loudestInput !== pendingSpeaker) {
+      pendingSpeaker = loudestInput;
+      pendingSince = now;
+      return;
+    }
+
+    // Same pending speaker is still dominant — check if hold time elapsed
+    if (now - pendingSince >= holdMs) {
       // Switch!
-      state.currentSpeaker = loudest;
+      state.currentSpeaker = loudestInput;
       state.switchCount++;
+      state.lastSwitchAt = now;
       pendingSpeaker = null;
 
-      const name = getInputName(loudest);
-      console.error(`[auto-switch] → ${name} (input ${loudest}) [switch #${state.switchCount}]`);
+      const name = getInputName(loudestInput);
 
-      if (transition === 'auto') {
-        atemInstance.changePreviewInput(loudest, me)
-          .then(() => atemInstance!.autoTransition(me))
-          .catch((e) => console.error('[auto-switch] transition error:', e));
+      if (mode === 'host_ssrc') {
+        // Host + Super Source hybrid mode:
+        //   Host talking → full-screen host on program
+        //   Guest talking → update Super Source box + cut to Super Source (6000)
+        const isHost = loudestInput === host;
+        if (isHost) {
+          console.error(`[auto-switch:host_ssrc] HOST full-screen → ${name} (input ${loudestInput}) [switch #${state.switchCount}]`);
+          atemInstance.changeProgramInput(loudestInput, me)
+            .catch((e) => console.error('[auto-switch:host_ssrc] program error:', e));
+        } else {
+          console.error(`[auto-switch:host_ssrc] GUEST → Box ${ssrcBox + 1} = ${name} (input ${loudestInput}), program → Super Source [switch #${state.switchCount}]`);
+          // Update the Super Source box with the active guest
+          atemInstance.setSuperSourceBoxSettings({ source: loudestInput }, ssrcBox, ssrcId)
+            .catch((e) => console.error('[auto-switch:host_ssrc] box update error:', e));
+          // Cut program to Super Source (6000) so the side-by-side is visible
+          atemInstance.changeProgramInput(6000, me)
+            .catch((e) => console.error('[auto-switch:host_ssrc] program→ssrc error:', e));
+        }
+      } else if (mode === 'ssrc_box') {
+        // Super Source box mode — update the box source instead of program
+        console.error(`[auto-switch:ssrc] Box ${ssrcBox + 1} → ${name} (input ${loudestInput}) [switch #${state.switchCount}]`);
+        atemInstance.setSuperSourceBoxSettings({ source: loudestInput }, ssrcBox, ssrcId)
+          .catch((e) => console.error('[auto-switch:ssrc] box update error:', e));
       } else {
-        atemInstance.changeProgramInput(loudest, me)
-          .catch((e) => console.error('[auto-switch] cut error:', e));
+        // Program mode — switch full-screen camera
+        console.error(`[auto-switch] → ${name} (input ${loudestInput}) [switch #${state.switchCount}]`);
+        if (transition === 'auto') {
+          atemInstance.changePreviewInput(loudestInput, me)
+            .then(() => atemInstance!.autoTransition(me))
+            .catch((e) => console.error('[auto-switch] transition error:', e));
+        } else {
+          atemInstance.changeProgramInput(loudestInput, me)
+            .catch((e) => console.error('[auto-switch] cut error:', e));
+        }
       }
     }
   }, intervalMs);
 
   autoSwitch = state;
-  console.error(`[auto-switch] Started: candidates=[${candidates}], hold=${holdMs}ms, interval=${intervalMs}ms, transition=${transition}`);
-  return `Auto-switch started! Monitoring inputs [${candidates.join(', ')}]. Hold: ${holdMs}ms. Transition: ${transition}. Say "auto switch off" to stop.`;
+
+  if (mode === 'host_ssrc') {
+    console.error(`[auto-switch:host_ssrc] Started: host=${host}, box=${ssrcBox + 1}, candidates=[${candidates}], hold=${holdMs}ms, cooldown=${cooldownMs}ms, interval=${intervalMs}ms`);
+    return `Auto-switch started in Host + Super Source mode! Host (input ${host}) talking → full-screen. Guest talking → Super Source with guest in box ${ssrcBox + 1}. Monitoring inputs [${candidates.join(', ')}]. Hold: ${holdMs / 1000}s, cooldown: ${cooldownMs / 1000}s. Say "auto switch off" to stop.`;
+  } else if (mode === 'ssrc_box') {
+    console.error(`[auto-switch:ssrc] Started: box=${ssrcBox + 1}, candidates=[${candidates}], hold=${holdMs}ms, cooldown=${cooldownMs}ms, interval=${intervalMs}ms`);
+    return `Auto-switch started in Super Source box mode! Box ${ssrcBox + 1} will follow the active speaker. Monitoring inputs [${candidates.join(', ')}]. Hold: ${holdMs / 1000}s, cooldown: ${cooldownMs / 1000}s. Say "auto switch off" to stop.`;
+  } else {
+    console.error(`[auto-switch] Started: candidates=[${candidates}], hold=${holdMs}ms, cooldown=${cooldownMs}ms, interval=${intervalMs}ms, transition=${transition}`);
+    return `Auto-switch started! Monitoring inputs [${candidates.join(', ')}]. Hold: ${holdMs / 1000}s, cooldown: ${cooldownMs / 1000}s. Transition: ${transition}. Say "auto switch off" to stop.`;
+  }
 }
 
 /**
@@ -251,11 +411,14 @@ export function getAutoSwitchStatus(): {
   candidates?: number[];
   hostInput?: number;
   holdMs?: number;
+  cooldownMs?: number;
   intervalMs?: number;
   transition?: string;
   currentSpeaker?: number | null;
   switchCount?: number;
   runningForSeconds?: number;
+  mode?: string;
+  ssrcBox?: number;
 } {
   if (!autoSwitch) return { running: false };
   return {
@@ -263,11 +426,14 @@ export function getAutoSwitchStatus(): {
     candidates: autoSwitch.candidates,
     hostInput: autoSwitch.hostInput,
     holdMs: autoSwitch.holdMs,
+    cooldownMs: autoSwitch.cooldownMs,
     intervalMs: autoSwitch.intervalMs,
     transition: autoSwitch.transition,
     currentSpeaker: autoSwitch.currentSpeaker,
     switchCount: autoSwitch.switchCount,
     runningForSeconds: Math.round((Date.now() - autoSwitch.startedAt) / 1000),
+    mode: autoSwitch.mode,
+    ssrcBox: (autoSwitch.mode === 'ssrc_box' || autoSwitch.mode === 'host_ssrc') ? autoSwitch.ssrcBox : undefined,
   };
 }
 

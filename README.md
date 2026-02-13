@@ -288,7 +288,7 @@ cloudflared tunnel delete atem-mcp   # Delete the tunnel entirely
 | `atem_set_supersource_border` | Configure border width, color, bevel, light source |
 | `atem_go_gallery` | 2x2 gallery grid: host + 3 guests, prioritizes active speakers via audio levels |
 | `atem_cut_to_active_speaker` | Cut full-screen to whoever is currently talking (detected via audio levels) |
-| `atem_auto_switch_on` | Start auto-switching mode — continuously follows the active speaker |
+| `atem_auto_switch_on` | Start auto-switching: program mode (full-screen), ssrc_box mode (Super Source box), or host_ssrc mode (host full-screen + guest side-by-side) |
 | `atem_auto_switch_off` | Stop auto-switching mode |
 | `atem_get_auto_switch_status` | Check if auto-switch is running, see stats |
 
@@ -376,6 +376,7 @@ Full parametric EQ, compressor, limiter, and gate/expander control for ATEM mode
 > "Go gallery with guests on cameras 2, 3, and 5"
 > "Cut to active speaker"
 > "Auto switch" *(starts following the active speaker continuously)*
+> "Auto switch host + active speaker" *(host full-screen when talking, side-by-side when guest talks)*
 > "Auto switch off"
 > "Set up a side-by-side with cameras 1 and 2"
 > "Cut to host with 3"

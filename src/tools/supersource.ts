@@ -701,35 +701,52 @@ Examples:
     'atem_auto_switch_on',
     {
       title: 'Auto Switch On',
-      description: `Start auto-switching mode — continuously monitors audio levels and switches to the active speaker automatically.
+      description: `Start auto-switching mode — continuously monitors audio levels and switches to the active speaker automatically, Zoom-style.
 
-The switcher follows whoever is talking: when a new person becomes the loudest speaker and stays loudest for the hold duration, the program cuts (or dissolves) to their camera.
+Three modes:
+  - **program** (default): Switches the full-screen program input to the active speaker
+  - **ssrc_box**: Updates a Super Source box source to the active speaker — perfect for "host + active speaker" side-by-side
+  - **host_ssrc**: Hybrid mode — host talking → cuts to host full-screen; guest talking → updates Super Source box with that guest AND cuts to Super Source (6000). Perfect for talk shows where the host gets their own shot but guests share a side-by-side with the host.
 
-A hold time prevents rapid bouncing between speakers. Default is 1.5 seconds — a new speaker must be the loudest for 1.5s before a switch occurs.
+Fast and responsive like Zoom's active speaker switching:
+  - **Instant detection** — uses real-time audio peaks to detect new speakers immediately
+  - **Hold time** (default 1s): brief confirmation to filter out coughs/bumps
+  - **Cooldown** (default 2s): short pause after switching to prevent ping-pong
+  - **Smart stickiness** — the current speaker uses smoothed audio levels so brief pauses between words don't cause a switch away
 
 Args:
-  - guestInputs (array of numbers, optional): Guest inputs to monitor (default: all inputs 1-8 except host)
-  - hostInput (number, optional): Host camera to exclude (default: 7)
-  - holdMs (number, optional): How long a new speaker must be loudest before switching, in ms (default: 1500)
-  - intervalMs (number, optional): How often to check levels, in ms (default: 500)
-  - transition (string, optional): "cut" or "auto" (default: "cut")
+  - mode (string, optional): "program", "ssrc_box", or "host_ssrc" (default: "program")
+  - ssrcBox (number, optional): Super Source box to update, 1-4 (default: 2). Used in ssrc_box and host_ssrc modes.
+  - guestInputs (array of numbers, optional): Inputs to monitor (default: all inputs 1-8 except host; in host_ssrc mode, host is automatically included)
+  - hostInput (number, optional): Host camera input (default: 7). In host_ssrc mode, this is who gets full-screen when they talk.
+  - holdMs (number, optional): How long a new speaker must talk before switching, in ms (default: 1000)
+  - cooldownMs (number, optional): Minimum ms between switches (default: 2000)
+  - transition (string, optional): "cut" or "auto" (default: "cut"). Only used in program mode.
   - me (number, optional): Mix Effect bus (default: 0)
 
 Examples:
-  - "Auto switch" → starts following the active speaker
-  - "Auto switch with a 2-second hold" → holdMs=2000
-  - "Auto switch with dissolves" → transition="auto"`,
+  - "Auto switch" → starts following the active speaker (full-screen)
+  - "Auto switch box 2 to active speaker" → mode="ssrc_box", ssrcBox=2
+  - "Host full-screen when talking, side-by-side when guest talks" → mode="host_ssrc", ssrcBox=2
+  - "Auto switch with dissolves" → transition="auto"
+  - "Auto switch on all cameras" → guestInputs=[1,2,3,4,5,6,7,8], hostInput=0`,
       inputSchema: {
+        mode: z.enum(['program', 'ssrc_box', 'host_ssrc']).default('program')
+          .describe('Mode: "program" switches full-screen, "ssrc_box" updates a Super Source box source, "host_ssrc" host full-screen + guest in Super Source'),
+        ssrcBox: z.number().int().min(1).max(4).default(2)
+          .describe('Super Source box to update (1-4, default: 2). Only used in ssrc_box mode.'),
         guestInputs: z.array(z.number().int()).optional()
-          .describe('Guest camera inputs to monitor (default: all 1-8 except host)'),
+          .describe('Camera inputs to monitor (default: all 1-8 except host)'),
         hostInput: z.number().int().default(7)
-          .describe('Host camera to exclude (default: 7)'),
-        holdMs: z.number().int().min(200).max(10000).default(1500)
-          .describe('Hold time in ms before switching to new speaker (default: 1500)'),
-        intervalMs: z.number().int().min(100).max(5000).default(500)
-          .describe('Level check interval in ms (default: 500)'),
+          .describe('Host camera to exclude (default: 7). Set to 0 to include all inputs.'),
+        holdMs: z.number().int().min(200).max(10000).default(1000)
+          .describe('Hold time in ms — new speaker must talk this long before switching (default: 1000)'),
+        cooldownMs: z.number().int().min(500).max(15000).default(2000)
+          .describe('Cooldown in ms — minimum time between switches (default: 2000)'),
+        intervalMs: z.number().int().min(100).max(5000).default(250)
+          .describe('Level check interval in ms (default: 250)'),
         transition: z.enum(['cut', 'auto']).default('cut')
-          .describe('Transition type: "cut" or "auto" (default: "cut")'),
+          .describe('Transition type: "cut" or "auto" (default: "cut"). Only used in program mode.'),
         me: z.number().int().min(0).max(3).default(0)
           .describe('Mix Effect bus (default: 0)')
       },
@@ -740,14 +757,18 @@ Examples:
         openWorldHint: false
       }
     },
-    async ({ guestInputs, hostInput, holdMs, intervalMs, transition, me }) => {
+    async ({ mode, ssrcBox, guestInputs, hostInput, holdMs, cooldownMs, intervalMs, transition, me }) => {
       const result = startAutoSwitch({
         candidates: guestInputs,
         hostInput: hostInput ?? 7,
-        holdMs: holdMs ?? 1500,
-        intervalMs: intervalMs ?? 500,
+        holdMs: holdMs ?? 1000,
+        cooldownMs: cooldownMs ?? 2000,
+        intervalMs: intervalMs ?? 250,
         me: me ?? 0,
         transition: transition ?? 'cut',
+        mode: mode ?? 'program',
+        ssrcBox: (ssrcBox ?? 2) - 1,  // Convert 1-based (user) to 0-based (API)
+        ssrcId: 0,
       });
       return { content: [{ type: 'text', text: result }] };
     }
@@ -799,14 +820,19 @@ Returns: running state, monitored inputs, hold time, transition type, current sp
         return { content: [{ type: 'text', text: 'Auto-switch is not running.' }] };
       }
       const currentName = status.currentSpeaker ? getInputName(status.currentSpeaker) : 'none yet';
+      const modeStr = status.mode === 'host_ssrc'
+        ? `Host + Super Source (host=${status.hostInput ?? 7} full-screen, guests→box ${(status.ssrcBox ?? 0) + 1})`
+        : status.mode === 'ssrc_box'
+        ? `Super Source box ${(status.ssrcBox ?? 0) + 1}`
+        : `Program (${status.transition})`;
       return {
         content: [{
           type: 'text',
           text: `Auto-switch is ACTIVE\n` +
+            `  Mode: ${modeStr}\n` +
             `  Monitoring: inputs [${status.candidates?.join(', ')}]\n` +
-            `  Hold time: ${status.holdMs}ms\n` +
-            `  Check interval: ${status.intervalMs}ms\n` +
-            `  Transition: ${status.transition}\n` +
+            `  Hold time: ${(status.holdMs ?? 1000) / 1000}s\n` +
+            `  Cooldown: ${(status.cooldownMs ?? 2000) / 1000}s\n` +
             `  Current speaker: ${currentName}${status.currentSpeaker ? ` (input ${status.currentSpeaker})` : ''}\n` +
             `  Switches: ${status.switchCount}\n` +
             `  Running for: ${status.runningForSeconds}s`
