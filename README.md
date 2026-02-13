@@ -376,6 +376,43 @@ The MCP server wraps `atem-connection` methods as MCP tools that Claude (or any 
 - **stdio** (default) — for Claude Desktop, Cursor, and local MCP clients
 - **HTTP** (`TRANSPORT=http`) — Streamable HTTP with OAuth 2.0, for claude.ai, Claude Mobile, and remote access. Uses Express + raw `http.createServer` for proper header handling with the MCP SDK.
 
+## Live Show Usage
+
+When using this server to control an ATEM during a live production, you need every command to execute instantly — no confirmation dialogs, no approval prompts, no delays. The experience varies by client:
+
+### Client Behavior
+
+| Client | Tool Approval | Best For |
+|--------|--------------|----------|
+| **claude.ai** | No approval needed — tools run immediately | Live shows, remote control |
+| **Claude Mobile** | No approval needed — tools run immediately | On-the-go control |
+| **Claude Desktop** | No approval needed — tools run immediately | Local production control |
+| **Claude Code (CLI)** | Requires approval for each tool call | Development and testing only |
+| **Cursor** | May require approval depending on settings | Development and testing |
+
+**For live production, use claude.ai, Claude Mobile, or Claude Desktop.** These clients execute MCP tool calls without interruption — you say *"cut to camera 2"* and it happens immediately.
+
+Claude Code (the terminal CLI) is designed for software development and has a safety system that prompts for approval before running tools. This is great for coding but unsuitable for live switching where every second counts.
+
+### Pre-Show Checklist
+
+Run through this checklist before going live to catch issues early:
+
+1. **Verify connection** — *"Show me the switcher status"*
+2. **Test switching** — *"Put camera 1 on preview, then cut to it"*
+3. **Test transitions** — *"Set transition to mix at 30 frames and dissolve to camera 2"*
+4. **Test audio** — *"Show me the audio mixer state"*
+5. **Test recording/streaming** — *"Start recording"* → verify → *"Stop recording"*
+6. **Test Super Source** (if using) — *"Set up a side-by-side with cameras 1 and 2"*
+7. **Set your show defaults** — transition style, rate, audio levels, EQ presets
+
+### Tips for Live Production
+
+- **Set `ATEM_HOST`** in your environment so the server auto-connects on startup — no need to manually connect each time
+- **Use specific language** — *"Cut to camera 3"* is faster than *"Can you switch to the third camera please?"*
+- **Combine commands** — *"Put camera 2 on preview and dissolve to it"* executes as a single `preview_and_auto` call
+- **Keep a fallback** — Always have ATEM Software Control or a hardware panel available in case of network issues
+
 ## Troubleshooting
 
 **Hammer icon not showing in Claude Desktop:**
