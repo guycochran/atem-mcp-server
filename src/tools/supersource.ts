@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getAtem, getInputName } from '../services/atem-connection.js';
+import { getAtem, getInputName, getActiveInputsByAudioLevel, isLevelTrackingActive } from '../services/atem-connection.js';
 import { Enums } from 'atem-connection';
 
 // ---------------------------------------------------------------------------
@@ -504,6 +504,121 @@ Args:
 
       await atem.setSuperSourceBorder(props, ssrcId ?? 0);
       return { content: [{ type: 'text', text: `Super Source border: ${results.join(', ')}` }] };
+    }
+  );
+
+  // ── Tool 6: Go Gallery ──────────────────────────────────────────────────
+  // Sets up a 2x2 grid with the host + 3 guests, prioritizing active speakers
+  // based on real-time audio levels from the Fairlight mixer.
+
+  server.registerTool(
+    'atem_go_gallery',
+    {
+      title: 'Go Gallery',
+      description: `Set up a 2×2 gallery grid with the host camera and 3 guest cameras, then cut to Super Source.
+
+Prioritizes guests who are currently speaking (detected via real-time audio levels from the Fairlight mixer). The guest with the highest audio level appears in box 2 (top-right), next in box 3 (bottom-left), next in box 4 (bottom-right).
+
+If audio level data is unavailable, falls back to the first 3 guests from the guest list.
+
+Args:
+  - hostInput (number, optional): Host camera input (default: 7)
+  - guestInputs (array of numbers, optional): All possible guest camera inputs to choose from (default: [1, 2, 3, 4, 5, 6, 8]). The tool picks the 3 most active.
+  - cutToProgram (boolean, optional): Automatically cut Super Source to program (default: true)
+  - ssrcId (number, optional): Super Source index (default: 0)
+
+Examples:
+  - "Go gallery" → 2x2 grid with host (cam 7) + 3 most active guests
+  - "Go gallery with guests on 2, 3, 5" → picks 3 most active from cameras 2, 3, 5`,
+      inputSchema: {
+        hostInput: z.number().int().default(7)
+          .describe('Host camera input number (default: 7)'),
+        guestInputs: z.array(z.number().int()).optional()
+          .describe('Guest camera inputs to choose from (default: all inputs except host). Picks the 3 most active.'),
+        cutToProgram: z.boolean().default(true)
+          .describe('Cut Super Source to program output (default: true)'),
+        ssrcId: z.number().int().min(0).max(3).default(0)
+          .describe('Super Source index (default: 0)')
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ hostInput, guestInputs, cutToProgram, ssrcId }) => {
+      const atem = getAtem();
+      const host = hostInput ?? 7;
+      const id = ssrcId ?? 0;
+
+      // Default guest list: all physical inputs 1-8 except the host
+      const candidates = guestInputs ?? [1, 2, 3, 4, 5, 6, 7, 8].filter(i => i !== host);
+
+      // Pick guests — prioritize by audio activity if available
+      let selectedGuests: number[];
+      let selectionMethod: string;
+
+      if (isLevelTrackingActive()) {
+        const activeSpeakers = getActiveInputsByAudioLevel(candidates);
+        if (activeSpeakers.length >= 3) {
+          selectedGuests = activeSpeakers.slice(0, 3).map(s => s.input);
+          selectionMethod = 'by audio activity (loudest first)';
+        } else if (activeSpeakers.length > 0) {
+          // Mix active speakers with fallback from candidate list
+          selectedGuests = activeSpeakers.map(s => s.input);
+          const remaining = candidates.filter(c => !selectedGuests.includes(c));
+          while (selectedGuests.length < 3 && remaining.length > 0) {
+            selectedGuests.push(remaining.shift()!);
+          }
+          selectionMethod = `${activeSpeakers.length} by audio, ${selectedGuests.length - activeSpeakers.length} fallback`;
+        } else {
+          // No audio data yet — use first 3 candidates
+          selectedGuests = candidates.slice(0, 3);
+          selectionMethod = 'no recent audio detected, using first 3 guests';
+        }
+      } else {
+        selectedGuests = candidates.slice(0, 3);
+        selectionMethod = 'audio tracking not active, using first 3 guests';
+      }
+
+      // Ensure we have exactly 3 guests (pad with candidates if needed)
+      while (selectedGuests.length < 3 && candidates.length > 0) {
+        const next = candidates.find(c => !selectedGuests.includes(c));
+        if (next !== undefined) selectedGuests.push(next);
+        else break;
+      }
+
+      // Set up 2x2 grid: Host=top-left, guests fill remaining 3 slots
+      const sources = [host, ...selectedGuests.slice(0, 3)];
+      const gridLayout = PRESETS.grid_2x2;
+
+      for (let i = 0; i < 4; i++) {
+        const boxLayout = gridLayout.boxes[i];
+        const boxProps: Record<string, unknown> = { ...boxLayout };
+        if (i < sources.length) {
+          boxProps.source = sources[i];
+        }
+        await atem.setSuperSourceBoxSettings(boxProps, i, id);
+      }
+
+      // Cut to Super Source on program
+      if (cutToProgram !== false) {
+        await atem.changeProgramInput(6000);
+      }
+
+      const guestNames = selectedGuests.slice(0, 3).map(g => `${getInputName(g)} (${g})`).join(', ');
+      return {
+        content: [{
+          type: 'text',
+          text: `Gallery view live! 2×2 grid:\n` +
+            `  Box 1 (top-left): ${getInputName(host)} (${host}) [HOST]\n` +
+            `  Box 2 (top-right): ${selectedGuests[0] !== undefined ? `${getInputName(selectedGuests[0])} (${selectedGuests[0]})` : 'none'}\n` +
+            `  Box 3 (bottom-left): ${selectedGuests[1] !== undefined ? `${getInputName(selectedGuests[1])} (${selectedGuests[1]})` : 'none'}\n` +
+            `  Box 4 (bottom-right): ${selectedGuests[2] !== undefined ? `${getInputName(selectedGuests[2])} (${selectedGuests[2]})` : 'none'}\n` +
+            `Guest selection: ${selectionMethod}`
+        }]
+      };
     }
   );
 }
