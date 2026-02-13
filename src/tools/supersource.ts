@@ -122,7 +122,11 @@ Returns: JSON object with boxes (array of 4 box states), art properties, and bor
       const atem = getAtem();
       const ssrc = atem.state?.video?.superSources?.[ssrcId ?? 0];
       if (!ssrc) {
-        return { content: [{ type: 'text', text: 'Super Source not available on this ATEM model.' }] };
+        const hasSuperSources = atem.state?.video?.superSources && Object.keys(atem.state.video.superSources).length > 0;
+        if (!hasSuperSources) {
+          return { content: [{ type: 'text', text: 'Super Source not available. This could mean the ATEM model does not support Super Source, or the ATEM state has not fully loaded yet. Try again in a moment, or verify your ATEM model supports Super Source (e.g., ATEM Mini Extreme, Constellation).' }] };
+        }
+        return { content: [{ type: 'text', text: `Super Source index ${ssrcId ?? 0} not found. Available indices: ${Object.keys(atem.state.video.superSources).join(', ')}` }] };
       }
 
       const boxes = ssrc.boxes.map((box, i) => {

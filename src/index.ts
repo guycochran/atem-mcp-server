@@ -7,7 +7,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import express from 'express';
 import http from 'http';
 import crypto from 'crypto';
-import { connectAtem } from './services/atem-connection.js';
+import { connectAtem, waitForConnection } from './services/atem-connection.js';
 import { registerConnectionTools } from './tools/connection.js';
 import { registerSwitchingTools } from './tools/switching.js';
 import { registerTransitionTools } from './tools/transitions.js';
@@ -19,7 +19,7 @@ import { registerSuperSourceTools } from './tools/supersource.js';
 const validTokens = new Set<string>();
 
 function createServer(): McpServer {
-  const server = new McpServer({ name: 'atem-mcp-server', version: '1.4.0' });
+  const server = new McpServer({ name: 'atem-mcp-server', version: '1.4.1' });
   registerConnectionTools(server);
   registerSwitchingTools(server);
   registerTransitionTools(server);
@@ -187,7 +187,7 @@ async function runHTTP(): Promise<void> {
   });
 
   app.get('/health', (_req: express.Request, res: express.Response) => {
-    res.json({ status: 'ok', server: 'atem-mcp-server', version: '1.4.0' });
+    res.json({ status: 'ok', server: 'atem-mcp-server', version: '1.4.1' });
   });
 
   app.post('/mcp', async (req: express.Request, res: express.Response) => {
@@ -203,6 +203,10 @@ async function runHTTP(): Promise<void> {
     const token = auth.substring(7);
     // Accept ANY bearer token (don't validate — just log)
     console.error(`[AUTH] ✓ Bearer ${token.substring(0, 8)}... known=${validTokens.has(token)}`);
+
+    // Wait for any in-progress ATEM auto-connection to complete before handling requests.
+    // This prevents race conditions where tools run before the ATEM state is populated.
+    await waitForConnection();
 
     try {
       const server = createServer();
@@ -231,7 +235,7 @@ async function runHTTP(): Promise<void> {
   autoConnect();
   const port = parseInt(process.env.PORT || '3000');
   httpServer.listen(port, () => {
-    console.error(`[atem-mcp] v1.4.0 | http://localhost:${port}/mcp | OAuth: ${baseUrl}`);
+    console.error(`[atem-mcp] v1.4.1 | http://localhost:${port}/mcp | OAuth: ${baseUrl}`);
   });
 }
 
