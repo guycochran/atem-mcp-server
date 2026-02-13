@@ -22,6 +22,14 @@ const audioLevels = new Map<number, InputAudioLevel>();
 /** How long (ms) to keep level data before it's considered stale */
 const LEVEL_WINDOW_MS = 3000;
 
+/**
+ * Minimum audio level to consider an input "active" (i.e., someone is speaking).
+ * The ATEM Fairlight mixer reports levels in hundredths of dB: -10000 = -100.00 dB = silence.
+ * A reasonable speech threshold is around -60 dB (-6000) — anything below this is
+ * background noise or silence and should not trigger speaker detection.
+ */
+const SILENCE_THRESHOLD = -6000;
+
 /** Whether we're currently receiving level data from the ATEM */
 let levelTrackingActive = false;
 
@@ -53,11 +61,19 @@ export async function startAudioLevelTracking(): Promise<void> {
 
 /**
  * Get inputs sorted by recent audio activity (loudest first).
- * Filters out stale entries and inputs not in the candidate list.
+ * Filters out stale entries, silent inputs, and inputs not in the candidate list.
+ *
+ * Only returns inputs whose audio level exceeds the silence threshold — this
+ * prevents "phantom" speaker detection when all inputs are quiet.
+ *
  * @param candidateInputs - only consider these input IDs (e.g., guest cameras)
- * @returns Array of { input, level } sorted by level descending
+ * @param includeAll - if true, include all candidates even silent ones (for diagnostics). Default false.
+ * @returns Array of { input, level } sorted by level descending (loudest first)
  */
-export function getActiveInputsByAudioLevel(candidateInputs?: number[]): { input: number; level: number }[] {
+export function getActiveInputsByAudioLevel(
+  candidateInputs?: number[],
+  includeAll = false,
+): { input: number; level: number }[] {
   const now = Date.now();
   const results: { input: number; level: number }[] = [];
 
@@ -66,6 +82,8 @@ export function getActiveInputsByAudioLevel(candidateInputs?: number[]): { input
     if (now - data.lastUpdate > LEVEL_WINDOW_MS) continue;
     // Skip if not in candidate list
     if (candidateInputs && !candidateInputs.includes(input)) continue;
+    // Skip silent inputs (below threshold) unless includeAll is set
+    if (!includeAll && data.recentPeak <= SILENCE_THRESHOLD) continue;
     results.push({ input, level: data.recentPeak });
   }
 
