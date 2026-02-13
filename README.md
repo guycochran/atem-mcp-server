@@ -223,7 +223,7 @@ cloudflared tunnel cleanup atem-mcp  # Remove stale connections
 cloudflared tunnel delete atem-mcp   # Delete the tunnel entirely
 ```
 
-## Available Tools (50 tools)
+## Available Tools (51 tools)
 
 ### Connection
 | Tool | Description |
@@ -287,6 +287,7 @@ cloudflared tunnel delete atem-mcp   # Delete the tunnel entirely
 | `atem_set_supersource_art` | Configure art fill/cut source, foreground/background |
 | `atem_set_supersource_border` | Configure border width, color, bevel, light source |
 | `atem_go_gallery` | 2x2 gallery grid: host + 3 guests, prioritizes active speakers via audio levels |
+| `atem_cut_to_active_speaker` | Cut full-screen to whoever is currently talking (detected via audio levels) |
 
 ### Audio Mixer (Fairlight + Classic)
 
@@ -367,11 +368,12 @@ Full parametric EQ, compressor, limiter, and gate/expander control for ATEM mode
 > "Show me the EQ and dynamics state for input 1"
 > "Reset all EQ on camera 1 to flat"
 
-**Gallery & Multi-View:**
+**Gallery & Active Speaker:**
 > "Go gallery"
 > "Go gallery with guests on cameras 2, 3, and 5"
+> "Cut to active speaker"
+> "Cut to active speaker with a dissolve"
 > "Set up a side-by-side with cameras 1 and 2"
-> "Show a 2x2 grid of all cameras"
 > "Cut to host with 3"
 
 ## Architecture

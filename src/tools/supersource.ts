@@ -621,4 +621,76 @@ Examples:
       };
     }
   );
+
+  // ── Tool 7: Cut to Active Speaker ─────────────────────────────────────
+  // Detects the guest with the highest audio level and cuts to them full-screen.
+
+  server.registerTool(
+    'atem_cut_to_active_speaker',
+    {
+      title: 'Cut to Active Speaker',
+      description: `Cut full-screen to the active speaker — the guest with the highest audio level (loudest VU meters).
+
+Uses real-time Fairlight audio level data to detect who is currently talking and puts them on program.
+
+Args:
+  - guestInputs (array of numbers, optional): Guest camera inputs to consider (default: all inputs 1-8 except host). Only guests in this list are eligible.
+  - hostInput (number, optional): Host camera input to exclude from active speaker detection (default: 7)
+  - transition (string, optional): How to switch — "cut" (instant) or "auto" (use current transition settings). Default: "cut"
+  - me (number, optional): Mix Effect bus (default: 0 for ME1)
+
+Examples:
+  - "Cut to active speaker" → detects loudest guest, hard cuts to them
+  - "Cut to active speaker with a dissolve" → transition="auto"`,
+      inputSchema: {
+        guestInputs: z.array(z.number().int()).optional()
+          .describe('Guest camera inputs to consider (default: all inputs 1-8 except host)'),
+        hostInput: z.number().int().default(7)
+          .describe('Host camera to exclude from detection (default: 7)'),
+        transition: z.enum(['cut', 'auto']).default('cut')
+          .describe('Transition type: "cut" (instant) or "auto" (dissolve/wipe). Default: "cut"'),
+        me: z.number().int().min(0).max(3).default(0)
+          .describe('Mix Effect bus (default: 0 for ME1)')
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ guestInputs, hostInput, transition, me }) => {
+      const atem = getAtem();
+      const host = hostInput ?? 7;
+      const meIndex = me ?? 0;
+      const candidates = guestInputs ?? [1, 2, 3, 4, 5, 6, 7, 8].filter(i => i !== host);
+
+      if (!isLevelTrackingActive()) {
+        return { content: [{ type: 'text', text: 'Audio level tracking is not active. Cannot detect active speaker. The ATEM may not have Fairlight audio, or the connection may still be initializing.' }] };
+      }
+
+      const activeSpeakers = getActiveInputsByAudioLevel(candidates);
+      if (activeSpeakers.length === 0) {
+        return { content: [{ type: 'text', text: `No active audio detected on guest inputs [${candidates.join(', ')}]. No one appears to be speaking right now.` }] };
+      }
+
+      const speaker = activeSpeakers[0];
+      const speakerName = getInputName(speaker.input);
+
+      // Set preview then transition, or hard cut
+      if ((transition ?? 'cut') === 'auto') {
+        await atem.changePreviewInput(speaker.input, meIndex);
+        await atem.autoTransition(meIndex);
+      } else {
+        await atem.changeProgramInput(speaker.input, meIndex);
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: `Active speaker: ${speakerName} (input ${speaker.input}) — now on program${(transition ?? 'cut') === 'auto' ? ' (auto transition)' : ' (cut)'}`
+        }]
+      };
+    }
+  );
 }
