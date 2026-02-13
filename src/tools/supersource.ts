@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getAtem, getInputName, getActiveInputsByAudioLevel, isLevelTrackingActive } from '../services/atem-connection.js';
+import { getAtem, getInputName, getActiveInputsByAudioLevel, isLevelTrackingActive, startAutoSwitch, stopAutoSwitch, getAutoSwitchStatus } from '../services/atem-connection.js';
 import { Enums } from 'atem-connection';
 
 // ---------------------------------------------------------------------------
@@ -689,6 +689,127 @@ Examples:
         content: [{
           type: 'text',
           text: `Active speaker: ${speakerName} (input ${speaker.input}) — now on program${(transition ?? 'cut') === 'auto' ? ' (auto transition)' : ' (cut)'}`
+        }]
+      };
+    }
+  );
+
+  // ── Tool 8: Auto Switch On ──────────────────────────────────────────────
+  // Starts continuous auto-switching to the active speaker.
+
+  server.registerTool(
+    'atem_auto_switch_on',
+    {
+      title: 'Auto Switch On',
+      description: `Start auto-switching mode — continuously monitors audio levels and switches to the active speaker automatically.
+
+The switcher follows whoever is talking: when a new person becomes the loudest speaker and stays loudest for the hold duration, the program cuts (or dissolves) to their camera.
+
+A hold time prevents rapid bouncing between speakers. Default is 1.5 seconds — a new speaker must be the loudest for 1.5s before a switch occurs.
+
+Args:
+  - guestInputs (array of numbers, optional): Guest inputs to monitor (default: all inputs 1-8 except host)
+  - hostInput (number, optional): Host camera to exclude (default: 7)
+  - holdMs (number, optional): How long a new speaker must be loudest before switching, in ms (default: 1500)
+  - intervalMs (number, optional): How often to check levels, in ms (default: 500)
+  - transition (string, optional): "cut" or "auto" (default: "cut")
+  - me (number, optional): Mix Effect bus (default: 0)
+
+Examples:
+  - "Auto switch" → starts following the active speaker
+  - "Auto switch with a 2-second hold" → holdMs=2000
+  - "Auto switch with dissolves" → transition="auto"`,
+      inputSchema: {
+        guestInputs: z.array(z.number().int()).optional()
+          .describe('Guest camera inputs to monitor (default: all 1-8 except host)'),
+        hostInput: z.number().int().default(7)
+          .describe('Host camera to exclude (default: 7)'),
+        holdMs: z.number().int().min(200).max(10000).default(1500)
+          .describe('Hold time in ms before switching to new speaker (default: 1500)'),
+        intervalMs: z.number().int().min(100).max(5000).default(500)
+          .describe('Level check interval in ms (default: 500)'),
+        transition: z.enum(['cut', 'auto']).default('cut')
+          .describe('Transition type: "cut" or "auto" (default: "cut")'),
+        me: z.number().int().min(0).max(3).default(0)
+          .describe('Mix Effect bus (default: 0)')
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ guestInputs, hostInput, holdMs, intervalMs, transition, me }) => {
+      const result = startAutoSwitch({
+        candidates: guestInputs,
+        hostInput: hostInput ?? 7,
+        holdMs: holdMs ?? 1500,
+        intervalMs: intervalMs ?? 500,
+        me: me ?? 0,
+        transition: transition ?? 'cut',
+      });
+      return { content: [{ type: 'text', text: result }] };
+    }
+  );
+
+  // ── Tool 9: Auto Switch Off ─────────────────────────────────────────────
+
+  server.registerTool(
+    'atem_auto_switch_off',
+    {
+      title: 'Auto Switch Off',
+      description: `Stop auto-switching mode. The current program input stays on air — switching simply stops following the active speaker.
+
+Also returns stats: how long auto-switch ran and how many switches it performed.`,
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async () => {
+      const result = stopAutoSwitch();
+      return { content: [{ type: 'text', text: result }] };
+    }
+  );
+
+  // ── Tool 10: Auto Switch Status ─────────────────────────────────────────
+
+  server.registerTool(
+    'atem_get_auto_switch_status',
+    {
+      title: 'Auto Switch Status',
+      description: `Check if auto-switch mode is currently running and get its configuration and stats.
+
+Returns: running state, monitored inputs, hold time, transition type, current speaker, switch count, and runtime.`,
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async () => {
+      const status = getAutoSwitchStatus();
+      if (!status.running) {
+        return { content: [{ type: 'text', text: 'Auto-switch is not running.' }] };
+      }
+      const currentName = status.currentSpeaker ? getInputName(status.currentSpeaker) : 'none yet';
+      return {
+        content: [{
+          type: 'text',
+          text: `Auto-switch is ACTIVE\n` +
+            `  Monitoring: inputs [${status.candidates?.join(', ')}]\n` +
+            `  Hold time: ${status.holdMs}ms\n` +
+            `  Check interval: ${status.intervalMs}ms\n` +
+            `  Transition: ${status.transition}\n` +
+            `  Current speaker: ${currentName}${status.currentSpeaker ? ` (input ${status.currentSpeaker})` : ''}\n` +
+            `  Switches: ${status.switchCount}\n` +
+            `  Running for: ${status.runningForSeconds}s`
         }]
       };
     }
