@@ -2,6 +2,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { getAtem, getInputName, getActiveInputsByAudioLevel, isLevelTrackingActive, startAutoSwitch, stopAutoSwitch, getAutoSwitchStatus } from '../services/atem-connection.js';
 import { Enums } from 'atem-connection';
+import { saveLook, loadLook, listLooks, deleteLook, getLooksDir } from '../services/looks.js';
+import type { Look, LookBox, LookArt, LookBorder } from '../services/looks.js';
 
 // ---------------------------------------------------------------------------
 // Preset layouts for Super Source
@@ -838,6 +840,331 @@ Returns: running state, monitored inputs, hold time, transition type, current sp
             `  Running for: ${status.runningForSeconds}s`
         }]
       };
+    }
+  );
+
+  // ── Tool 11: Save Look ───────────────────────────────────────────────────
+  // Snapshots the current Super Source state and saves it as a named "look"
+  // that can be recalled later.
+
+  server.registerTool(
+    'atem_save_look',
+    {
+      title: 'Save Super Source Look',
+      description: `Snapshot the current Super Source state (all 4 box positions/sources, art settings, border settings) and save it as a named "look" that can be recalled later.
+
+Looks are saved as JSON files in ~/.atem-mcp/looks/ and persist across server restarts.
+
+Args:
+  - name (string): Name for this look (e.g., "podcast4", "interview_2cam", "panel_discussion"). Used as the filename — alphanumeric, dashes, underscores.
+  - description (string, optional): Human-readable description of what this look is for
+  - ssrcId (number, optional): Super Source index to snapshot (default: 0)
+
+Examples:
+  - "Save this look as podcast4" → name="podcast4"
+  - "Save this as interview setup" → name="interview_setup", description="Host left, guest right, side-by-side"`,
+      inputSchema: {
+        name: z.string().min(1).max(64).describe('Name for this look (used as filename)'),
+        description: z.string().optional().describe('Description of what this look is for'),
+        ssrcId: z.number().int().min(0).max(3).default(0).describe('Super Source index to snapshot (default: 0)')
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ name, description, ssrcId }) => {
+      const atem = getAtem();
+      const ssrc = atem.state?.video?.superSources?.[ssrcId ?? 0];
+      if (!ssrc) {
+        return { content: [{ type: 'text', text: 'Super Source not available. Cannot save look.' }] };
+      }
+
+      // Snapshot boxes
+      const boxes: LookBox[] = ssrc.boxes.map((box) => {
+        if (!box) return { enabled: false, source: 0, x: 0, y: 0, size: 500, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 };
+        return {
+          enabled: box.enabled ?? false,
+          source: box.source ?? 0,
+          sourceName: getInputName(box.source ?? 0),
+          x: box.x ?? 0,
+          y: box.y ?? 0,
+          size: box.size ?? 500,
+          cropped: box.cropped ?? false,
+          cropTop: box.cropTop ?? 0,
+          cropBottom: box.cropBottom ?? 0,
+          cropLeft: box.cropLeft ?? 0,
+          cropRight: box.cropRight ?? 0,
+        };
+      });
+
+      // Snapshot art
+      let art: LookArt | undefined;
+      if (ssrc.properties) {
+        art = {
+          artFillSource: ssrc.properties.artFillSource ?? 0,
+          artCutSource: ssrc.properties.artCutSource ?? 0,
+          artOption: ssrc.properties.artOption ?? 0,
+          artPreMultiplied: ssrc.properties.artPreMultiplied ?? false,
+          artClip: ssrc.properties.artClip ?? 0,
+          artGain: ssrc.properties.artGain ?? 0,
+          artInvertKey: ssrc.properties.artInvertKey ?? false,
+        };
+      }
+
+      // Snapshot border
+      let border: LookBorder | undefined;
+      if (ssrc.border) {
+        border = {
+          borderEnabled: ssrc.border.borderEnabled ?? false,
+          borderBevel: ssrc.border.borderBevel ?? 0,
+          borderOuterWidth: ssrc.border.borderOuterWidth ?? 0,
+          borderInnerWidth: ssrc.border.borderInnerWidth ?? 0,
+          borderOuterSoftness: ssrc.border.borderOuterSoftness ?? 0,
+          borderInnerSoftness: ssrc.border.borderInnerSoftness ?? 0,
+          borderBevelSoftness: ssrc.border.borderBevelSoftness ?? 0,
+          borderBevelPosition: ssrc.border.borderBevelPosition ?? 0,
+          borderHue: ssrc.border.borderHue ?? 0,
+          borderSaturation: ssrc.border.borderSaturation ?? 0,
+          borderLuma: ssrc.border.borderLuma ?? 0,
+          borderLightSourceDirection: ssrc.border.borderLightSourceDirection ?? 0,
+          borderLightSourceAltitude: ssrc.border.borderLightSourceAltitude ?? 0,
+        };
+      }
+
+      const look: Look = {
+        name,
+        description,
+        createdAt: new Date().toISOString(),
+        boxes,
+        art,
+        border,
+      };
+
+      const filePath = await saveLook(look);
+      const enabledBoxes = boxes.filter(b => b.enabled);
+      const boxSummary = enabledBoxes.map((b, i) => {
+        const boxNum = boxes.indexOf(b) + 1;
+        return `Box ${boxNum}: ${b.sourceName ?? `input ${b.source}`}`;
+      }).join(', ');
+
+      return {
+        content: [{
+          type: 'text',
+          text: `Look "${name}" saved! (${enabledBoxes.length} active boxes: ${boxSummary})${description ? `\nDescription: ${description}` : ''}\nFile: ${filePath}`
+        }]
+      };
+    }
+  );
+
+  // ── Tool 12: Load Look ───────────────────────────────────────────────────
+  // Recalls a saved look and applies it to the Super Source.
+
+  server.registerTool(
+    'atem_load_look',
+    {
+      title: 'Load Super Source Look',
+      description: `Load a previously saved Super Source look and apply it to the ATEM. Restores all box positions, sizes, crops, art settings, and border settings.
+
+Optionally override the source assignments — great for reusing the same layout geometry with different cameras/guests.
+
+Args:
+  - name (string): Name of the saved look to load
+  - sources (array of numbers, optional): Override source assignments for each box (box 1-4). Only enabled boxes are affected. Example: [2, 3, 6, 7] assigns cameras 2/3/6/7 to the 4 boxes.
+  - cutToProgram (boolean, optional): Automatically cut Super Source to program after loading (default: false)
+  - ssrcId (number, optional): Super Source index to apply to (default: 0)
+
+Examples:
+  - "Load podcast4" → name="podcast4"
+  - "Load podcast4 with cameras 2,3,6,7" → name="podcast4", sources=[2,3,6,7]
+  - "Load interview and go live" → name="interview", cutToProgram=true`,
+      inputSchema: {
+        name: z.string().min(1).describe('Name of the saved look to load'),
+        sources: z.array(z.number().int()).optional()
+          .describe('Override source assignments for each box (in order of box 1-4)'),
+        cutToProgram: z.boolean().default(false)
+          .describe('Cut Super Source (6000) to program after loading (default: false)'),
+        ssrcId: z.number().int().min(0).max(3).default(0)
+          .describe('Super Source index to apply to (default: 0)')
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ name, sources, cutToProgram, ssrcId }) => {
+      const look = await loadLook(name);
+      if (!look) {
+        const allLooks = await listLooks();
+        const available = allLooks.length > 0
+          ? `Available looks: ${allLooks.map(l => l.name).join(', ')}`
+          : 'No looks saved yet. Use atem_save_look to save one.';
+        return { content: [{ type: 'text', text: `Look "${name}" not found. ${available}` }] };
+      }
+
+      const atem = getAtem();
+      const id = ssrcId ?? 0;
+
+      // Apply boxes
+      let sourceIndex = 0;
+      const boxResults: string[] = [];
+      for (let i = 0; i < 4; i++) {
+        const box = look.boxes[i];
+        if (!box) {
+          await atem.setSuperSourceBoxSettings({ enabled: false }, i, id);
+          continue;
+        }
+
+        const props: Record<string, unknown> = {
+          enabled: box.enabled,
+          x: box.x,
+          y: box.y,
+          size: box.size,
+          cropped: box.cropped,
+          cropTop: box.cropTop,
+          cropBottom: box.cropBottom,
+          cropLeft: box.cropLeft,
+          cropRight: box.cropRight,
+        };
+
+        // Source: use override if provided, otherwise use saved source
+        if (sources && sourceIndex < sources.length && box.enabled) {
+          props.source = sources[sourceIndex];
+          boxResults.push(`Box ${i + 1}: ${getInputName(sources[sourceIndex])} (override)`);
+          sourceIndex++;
+        } else {
+          props.source = box.source;
+          if (box.enabled) {
+            boxResults.push(`Box ${i + 1}: ${getInputName(box.source)}`);
+          }
+        }
+
+        await atem.setSuperSourceBoxSettings(props, i, id);
+      }
+
+      // Apply art settings
+      if (look.art) {
+        await atem.setSuperSourceProperties({
+          artFillSource: look.art.artFillSource,
+          artCutSource: look.art.artCutSource,
+          artOption: look.art.artOption,
+          artPreMultiplied: look.art.artPreMultiplied,
+          artClip: look.art.artClip,
+          artGain: look.art.artGain,
+          artInvertKey: look.art.artInvertKey,
+        }, id);
+      }
+
+      // Apply border settings
+      if (look.border) {
+        await atem.setSuperSourceBorder({
+          borderEnabled: look.border.borderEnabled,
+          borderBevel: look.border.borderBevel,
+          borderOuterWidth: look.border.borderOuterWidth,
+          borderInnerWidth: look.border.borderInnerWidth,
+          borderOuterSoftness: look.border.borderOuterSoftness,
+          borderInnerSoftness: look.border.borderInnerSoftness,
+          borderBevelSoftness: look.border.borderBevelSoftness,
+          borderBevelPosition: look.border.borderBevelPosition,
+          borderHue: look.border.borderHue,
+          borderSaturation: look.border.borderSaturation,
+          borderLuma: look.border.borderLuma,
+          borderLightSourceDirection: look.border.borderLightSourceDirection,
+          borderLightSourceAltitude: look.border.borderLightSourceAltitude,
+        }, id);
+      }
+
+      // Optionally cut to Super Source
+      if (cutToProgram) {
+        await atem.changeProgramInput(6000);
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: `Look "${look.name}" loaded!${look.description ? ` (${look.description})` : ''}\n` +
+            `  ${boxResults.join('\n  ')}` +
+            (look.art ? '\n  Art: restored' : '') +
+            (look.border ? '\n  Border: restored' : '') +
+            (cutToProgram ? '\n  Super Source → Program' : '')
+        }]
+      };
+    }
+  );
+
+  // ── Tool 13: List Looks ──────────────────────────────────────────────────
+  // Lists all saved looks.
+
+  server.registerTool(
+    'atem_list_looks',
+    {
+      title: 'List Saved Looks',
+      description: `List all saved Super Source looks. Shows each look's name, description, creation date, and number of active boxes.
+
+Looks are stored in ~/.atem-mcp/looks/ as JSON files.`,
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async () => {
+      const looks = await listLooks();
+      if (looks.length === 0) {
+        return { content: [{ type: 'text', text: `No looks saved yet. Use atem_save_look to save the current Super Source layout.\nLooks directory: ${getLooksDir()}` }] };
+      }
+
+      const lines = looks.map((l, i) => {
+        const desc = l.description ? ` — ${l.description}` : '';
+        const date = new Date(l.createdAt).toLocaleString();
+        return `${i + 1}. **${l.name}**${desc}\n     ${l.enabledBoxes} boxes | saved ${date}`;
+      });
+
+      return {
+        content: [{
+          type: 'text',
+          text: `Saved looks (${looks.length}):\n${lines.join('\n')}\n\nDirectory: ${getLooksDir()}`
+        }]
+      };
+    }
+  );
+
+  // ── Tool 14: Delete Look ─────────────────────────────────────────────────
+
+  server.registerTool(
+    'atem_delete_look',
+    {
+      title: 'Delete Saved Look',
+      description: `Delete a previously saved Super Source look.
+
+Args:
+  - name (string): Name of the look to delete`,
+      inputSchema: {
+        name: z.string().min(1).describe('Name of the saved look to delete')
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ name }) => {
+      const deleted = await deleteLook(name);
+      if (deleted) {
+        return { content: [{ type: 'text', text: `Look "${name}" deleted.` }] };
+      }
+      const allLooks = await listLooks();
+      const available = allLooks.length > 0
+        ? `Available looks: ${allLooks.map(l => l.name).join(', ')}`
+        : 'No looks saved.';
+      return { content: [{ type: 'text', text: `Look "${name}" not found. ${available}` }] };
     }
   );
 }

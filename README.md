@@ -223,7 +223,7 @@ cloudflared tunnel cleanup atem-mcp  # Remove stale connections
 cloudflared tunnel delete atem-mcp   # Delete the tunnel entirely
 ```
 
-## Available Tools (54 tools)
+## Available Tools (58 tools)
 
 ### Connection
 | Tool | Description |
@@ -291,6 +291,10 @@ cloudflared tunnel delete atem-mcp   # Delete the tunnel entirely
 | `atem_auto_switch_on` | Start auto-switching: program mode (full-screen), ssrc_box mode (Super Source box), or host_ssrc mode (host full-screen + guest side-by-side) |
 | `atem_auto_switch_off` | Stop auto-switching mode |
 | `atem_get_auto_switch_status` | Check if auto-switch is running, see stats |
+| `atem_save_look` | Save current Super Source layout as a named "look" (boxes, art, border) |
+| `atem_load_look` | Load a saved look and apply it — optionally override sources for different guests |
+| `atem_list_looks` | List all saved looks with descriptions and box counts |
+| `atem_delete_look` | Delete a saved look |
 
 ### Audio Mixer (Fairlight + Classic)
 
@@ -380,6 +384,13 @@ Full parametric EQ, compressor, limiter, and gate/expander control for ATEM mode
 > "Auto switch off"
 > "Set up a side-by-side with cameras 1 and 2"
 > "Cut to host with 3"
+
+**Save & Recall Looks:**
+> "Save this look as podcast4"
+> "Load podcast4"
+> "Load podcast4 with cameras 2, 3, 6, 7" *(reuses layout geometry with different sources)*
+> "What looks do I have saved?"
+> "Delete the old_test look"
 
 ## Architecture
 
