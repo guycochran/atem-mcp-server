@@ -15,11 +15,12 @@ import { registerRoutingTools } from './tools/routing.js';
 import { registerMacroTools, registerRecordingStreamingTools } from './tools/macros-recording.js';
 import { registerAudioTools } from './tools/audio.js';
 import { registerSuperSourceTools } from './tools/supersource.js';
+import { registerFairlightTools } from './tools/fairlight.js';
 
 const validTokens = new Set<string>();
 
 function createServer(): McpServer {
-  const server = new McpServer({ name: 'atem-mcp-server', version: '1.4.1' });
+  const server = new McpServer({ name: 'atem-mcp-server', version: '1.5.0' });
   registerConnectionTools(server);
   registerSwitchingTools(server);
   registerTransitionTools(server);
@@ -28,6 +29,7 @@ function createServer(): McpServer {
   registerRecordingStreamingTools(server);
   registerAudioTools(server);
   registerSuperSourceTools(server);
+  registerFairlightTools(server);
   return server;
 }
 
@@ -187,7 +189,7 @@ async function runHTTP(): Promise<void> {
   });
 
   app.get('/health', (_req: express.Request, res: express.Response) => {
-    res.json({ status: 'ok', server: 'atem-mcp-server', version: '1.4.1' });
+    res.json({ status: 'ok', server: 'atem-mcp-server', version: '1.5.0' });
   });
 
   app.post('/mcp', async (req: express.Request, res: express.Response) => {
@@ -235,7 +237,7 @@ async function runHTTP(): Promise<void> {
   autoConnect();
   const port = parseInt(process.env.PORT || '3000');
   httpServer.listen(port, () => {
-    console.error(`[atem-mcp] v1.4.1 | http://localhost:${port}/mcp | OAuth: ${baseUrl}`);
+    console.error(`[atem-mcp] v1.5.0 | http://localhost:${port}/mcp | OAuth: ${baseUrl}`);
   });
 }
 

@@ -223,7 +223,7 @@ cloudflared tunnel cleanup atem-mcp  # Remove stale connections
 cloudflared tunnel delete atem-mcp   # Delete the tunnel entirely
 ```
 
-## Available Tools (37 tools)
+## Available Tools (49 tools)
 
 ### Connection
 | Tool | Description |
@@ -297,6 +297,25 @@ Audio tools auto-detect the mixer type. **Fairlight** is used on ATEM Mini Extre
 | `atem_set_audio_master_output` | Set master output gain/fader |
 | `atem_get_audio_state` | Get full audio mixer state (reports mixer type) |
 
+### Fairlight EQ & Dynamics
+
+Full parametric EQ, compressor, limiter, and gate/expander control for ATEM models with Fairlight audio (Mini Extreme, Constellation, and newer). Includes EQ presets for common use cases.
+
+| Tool | Description |
+|------|-------------|
+| `atem_set_fairlight_eq` | Set individual EQ band (shape, frequency, gain, Q) on an input |
+| `atem_set_fairlight_eq_preset` | Apply EQ preset: vocal, podcast, music, de_mud, or flat |
+| `atem_set_fairlight_compressor` | Set compressor (threshold, ratio, attack, hold, release) |
+| `atem_set_fairlight_limiter` | Set limiter (threshold, attack, hold, release) |
+| `atem_set_fairlight_gate` | Set noise gate/expander (threshold, range, ratio, attack, release) |
+| `atem_get_fairlight_eq_state` | Get full EQ + dynamics state for an input |
+| `atem_set_fairlight_master_eq` | Set EQ band on master output |
+| `atem_set_fairlight_master_compressor` | Set compressor on master output |
+| `atem_set_fairlight_master_limiter` | Set limiter on master output |
+| `atem_set_fairlight_makeup_gain` | Set makeup gain on an input |
+| `atem_reset_fairlight_dynamics` | Reset compressor/limiter/gate to factory defaults |
+| `atem_reset_fairlight_eq` | Reset EQ to factory defaults |
+
 ## Common Input IDs
 
 | ID | Source |
@@ -337,6 +356,15 @@ Audio tools auto-detect the mixer type. **Fairlight** is used on ATEM Mini Extre
 > "Mute audio on input 3"
 > "Set master output to -3dB"
 > "Show me the audio mixer state"
+
+**Fairlight EQ & Dynamics:**
+> "Apply vocal EQ preset to mic 1"
+> "Boost presence at 3kHz on camera 2 audio"
+> "Add a compressor to mic 1 — 4:1 ratio, threshold at -20dB"
+> "Gate mic 2 so it cuts off below -40dB"
+> "Put a limiter on the master at -3dB"
+> "Show me the EQ and dynamics state for input 1"
+> "Reset all EQ on camera 1 to flat"
 
 ## Architecture
 
