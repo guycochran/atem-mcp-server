@@ -287,12 +287,15 @@ cloudflared tunnel delete atem-mcp   # Delete the tunnel entirely
 | `atem_set_supersource_art` | Configure art fill/cut source, foreground/background |
 | `atem_set_supersource_border` | Configure border width, color, bevel, light source |
 
-### Audio Mixer
+### Audio Mixer (Fairlight + Classic)
+
+Audio tools auto-detect the mixer type. **Fairlight** is used on ATEM Mini Extreme, Constellation, and newer models. **Classic** is used on ATEM Mini, Mini Pro, and older models.
+
 | Tool | Description |
 |------|-------------|
-| `atem_set_audio_mixer_input` | Set input gain, balance, mix mode |
-| `atem_set_audio_master_output` | Set master output gain |
-| `atem_get_audio_state` | Get full audio mixer state |
+| `atem_set_audio_mixer_input` | Set input gain, fader, balance, mix mode (Fairlight or Classic) |
+| `atem_set_audio_master_output` | Set master output gain/fader |
+| `atem_get_audio_state` | Get full audio mixer state (reports mixer type) |
 
 ## Common Input IDs
 
@@ -328,10 +331,12 @@ cloudflared tunnel delete atem-mcp   # Delete the tunnel entirely
 > "What's the recording status?"  
 > "Stop streaming but keep recording"
 
-**Audio:**
-> "Set camera 1 audio to audio-follow-video mode at 0dB"  
-> "Mute audio on input 3"  
+**Audio (Fairlight & Classic):**
+> "Lower camera 2 audio by 5 dB"
+> "Set camera 1 audio to audio-follow-video mode"
+> "Mute audio on input 3"
 > "Set master output to -3dB"
+> "Show me the audio mixer state"
 
 ## Architecture
 
