@@ -223,7 +223,7 @@ cloudflared tunnel cleanup atem-mcp  # Remove stale connections
 cloudflared tunnel delete atem-mcp   # Delete the tunnel entirely
 ```
 
-## Available Tools (30 tools)
+## Available Tools (37 tools)
 
 ### Connection
 | Tool | Description |
@@ -277,6 +277,15 @@ cloudflared tunnel delete atem-mcp   # Delete the tunnel entirely
 | `atem_start_streaming` | Start streaming |
 | `atem_stop_streaming` | Stop streaming |
 | `atem_get_recording_status` | Get recording/streaming status |
+
+### Super Source
+| Tool | Description |
+|------|-------------|
+| `atem_get_supersource_state` | Get all box positions, sources, art, and border settings |
+| `atem_set_supersource_box` | Configure a single box (source, position, size, crop) |
+| `atem_set_supersource_layout` | Set layout with presets (side-by-side, 2x2 grid, PiP, etc.) |
+| `atem_set_supersource_art` | Configure art fill/cut source, foreground/background |
+| `atem_set_supersource_border` | Configure border width, color, bevel, light source |
 
 ### Audio Mixer
 | Tool | Description |

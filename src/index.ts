@@ -14,6 +14,7 @@ import { registerTransitionTools } from './tools/transitions.js';
 import { registerRoutingTools } from './tools/routing.js';
 import { registerMacroTools, registerRecordingStreamingTools } from './tools/macros-recording.js';
 import { registerAudioTools } from './tools/audio.js';
+import { registerSuperSourceTools } from './tools/supersource.js';
 
 const validTokens = new Set<string>();
 
@@ -26,6 +27,7 @@ function createServer(): McpServer {
   registerMacroTools(server);
   registerRecordingStreamingTools(server);
   registerAudioTools(server);
+  registerSuperSourceTools(server);
   return server;
 }
 
