@@ -1,6 +1,6 @@
 {
   "name": "atem-mcp-server",
-  "version": "1.1.0",
+  "version": "1.4.0",
   "description": "MCP server for controlling Blackmagic ATEM video switchers via AI assistants like Claude. Supports both local (stdio) and remote (HTTP) transports for use with Claude Desktop, claude.ai, and Claude Mobile.",
   "author": "Guy Cochran",
   "main": "dist/index.js",
@@ -11,17 +11,28 @@
     "start:http": "TRANSPORT=http node dist/index.js",
     "dev": "tsc --watch"
   },
-  "keywords": ["mcp", "atem", "blackmagic", "video-switcher", "live-production", "model-context-protocol", "claude", "ai", "remote-mcp", "streamable-http"],
+  "keywords": [
+    "mcp",
+    "atem",
+    "blackmagic",
+    "video-switcher",
+    "live-production",
+    "model-context-protocol",
+    "claude",
+    "ai",
+    "remote-mcp",
+    "streamable-http"
+  ],
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "atem-connection": "^3.8.0",
     "express": "^4.21.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
+    "@types/express": "^5.0.0",
     "@types/node": "^22.0.0",
-    "@types/express": "^5.0.0"
+    "typescript": "^5.7.0"
   }
 }

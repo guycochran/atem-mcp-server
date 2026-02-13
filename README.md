@@ -1,8 +1,10 @@
 # ATEM MCP Server
 
-Control Blackmagic ATEM video switchers with AI assistants (Claude Desktop, Cursor, etc.) using the Model Context Protocol.
+Control Blackmagic ATEM video switchers with AI assistants using the Model Context Protocol. Works with **Claude Desktop**, **claude.ai**, **Claude Mobile**, **Cursor**, and any MCP-compatible client.
 
 Talk to your switcher in plain English: *"Put camera 2 on program and dissolve to it"* or *"Start streaming and recording"* or *"Run macro 3."*
+
+Supports both **local** (stdio) and **remote** (Streamable HTTP with OAuth 2.0) transports.
 
 ## How It Works
 
@@ -82,8 +84,144 @@ Quit and relaunch Claude Desktop. You should see the hammer (🔨) icon indicati
 |----------|-------------|---------|
 | `ATEM_HOST` | ATEM IP address (enables auto-connect) | — |
 | `ATEM_PORT` | ATEM port | `9910` |
+| `TRANSPORT` | Transport mode: `stdio` or `http` | `stdio` |
+| `PORT` | HTTP server port (when `TRANSPORT=http`) | `3000` |
+| `BASE_URL` | Public URL for OAuth endpoints (when behind a tunnel/proxy) | `http://localhost:PORT` |
 
 If `ATEM_HOST` is set, the server auto-connects on startup. Otherwise, use `atem_connect` to connect manually.
+
+## Remote Access (claude.ai, Claude Mobile, HTTP)
+
+The HTTP transport exposes the MCP server as a web endpoint with built-in OAuth 2.0. This enables remote access from **claude.ai**, **Claude Mobile**, and any HTTP-capable MCP client.
+
+### Quick Start (HTTP Mode)
+
+```bash
+TRANSPORT=http BASE_URL=https://atem.yourdomain.com ATEM_HOST=192.168.1.100 node dist/index.js
+```
+
+The server starts on port 3000 with:
+- **MCP endpoint:** `POST /mcp` (Bearer token required)
+- **OAuth 2.0:** Full auto-provisioning flow (discovery, registration, authorization, token exchange)
+- **Health check:** `GET /health`
+
+### Connect from claude.ai
+
+1. Go to [claude.ai/settings/connectors](https://claude.ai/settings/connectors)
+2. Click **Add custom connector**
+3. Enter your MCP URL (e.g., `https://atem.yourdomain.com/mcp`)
+4. Click **Connect** — the OAuth flow completes automatically
+5. Start a conversation and control your ATEM remotely
+
+### Connect from Claude Desktop (Remote)
+
+```json
+{
+  "mcpServers": {
+    "atem": {
+      "url": "https://atem.yourdomain.com/mcp"
+    }
+  }
+}
+```
+
+No `command` or `args` needed — the server runs remotely.
+
+### OAuth 2.0 Implementation
+
+The HTTP server implements a complete OAuth 2.0 flow for MCP authentication:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /.well-known/oauth-protected-resource` | RFC 9728 resource metadata |
+| `GET /.well-known/oauth-authorization-server` | Authorization server metadata |
+| `POST /register` | Dynamic Client Registration (DCR) |
+| `GET /authorize` | Authorization endpoint (auto-approves) |
+| `POST /token` | Token exchange (issues Bearer tokens) |
+
+The OAuth server auto-provisions tokens without user interaction — designed for personal/trusted use. For production environments, consider adding proper authentication.
+
+### Expose with Cloudflare Tunnel
+
+Use a named Cloudflare Tunnel for a permanent URL — no port forwarding, no dynamic DNS, no changing URLs.
+
+#### Prerequisites
+
+- A free [Cloudflare](https://dash.cloudflare.com/sign-up) account
+- A domain managed by Cloudflare DNS
+- `cloudflared` CLI installed (`brew install cloudflared` on macOS)
+
+#### Setup
+
+**1. Authenticate and create tunnel**
+
+```bash
+cloudflared login
+cloudflared tunnel create atem-mcp
+```
+
+Note the tunnel ID (a UUID).
+
+**2. Route DNS**
+
+```bash
+cloudflared tunnel route dns atem-mcp atem.yourdomain.com
+```
+
+**3. Create config file** (`~/.cloudflared/config.yml`)
+
+```yaml
+tunnel: <TUNNEL_ID>
+credentials-file: ~/.cloudflared/<TUNNEL_ID>.json
+
+ingress:
+  - hostname: atem.yourdomain.com
+    service: http://localhost:3000
+  - service: http_status:404
+```
+
+**4. Start the server and tunnel**
+
+```bash
+# Terminal 1: MCP server
+TRANSPORT=http BASE_URL=https://atem.yourdomain.com ATEM_HOST=192.168.1.100 node dist/index.js
+
+# Terminal 2: Cloudflare tunnel
+cloudflared tunnel run atem-mcp
+```
+
+Your MCP endpoint is now live at `https://atem.yourdomain.com/mcp`.
+
+#### Critical: Disable Cloudflare AI Bot Blocking
+
+> **If you use Cloudflare and connect from claude.ai, you must disable AI bot blocking or claude.ai's requests will be silently blocked with a 403.**
+
+Claude.ai's backend uses the `Claude-User` user agent from Google Cloud Platform IPs. Cloudflare's "Block AI training bots" managed rule blocks these requests before they reach your server.
+
+**To fix:**
+
+1. Go to **Cloudflare Dashboard** > select your domain
+2. On the **Overview** page, find **"Block AI training bots"** on the right sidebar
+3. Change from **"Block on all pages"** to **"Do not block (allow crawlers)"**
+
+You can verify in **Security > Analytics > Events** — blocked requests show as `Service: Managed rules`, `Rule: Manage AI bots`, `User agent: Claude-User`.
+
+#### Run as a Background Service (macOS)
+
+```bash
+sudo cloudflared service install
+```
+
+This creates a launch daemon that starts the tunnel on boot.
+
+#### Useful Commands
+
+```bash
+cloudflared tunnel list              # List all tunnels
+cloudflared tunnel info atem-mcp     # Show tunnel details
+cloudflared tunnel cleanup atem-mcp  # Remove stale connections
+cloudflared tunnel delete atem-mcp   # Delete the tunnel entirely
+```
 
 ## Available Tools (30 tools)
 
@@ -192,6 +330,10 @@ This server uses the **atem-connection** library (by NRK/Sofie TV Automation) wh
 
 The MCP server wraps `atem-connection` methods as MCP tools that Claude (or any MCP-compatible AI) can call. Each tool maps to one or more ATEM commands.
 
+**Transport modes:**
+- **stdio** (default) — for Claude Desktop, Cursor, and local MCP clients
+- **HTTP** (`TRANSPORT=http`) — Streamable HTTP with OAuth 2.0, for claude.ai, Claude Mobile, and remote access. Uses Express + raw `http.createServer` for proper header handling with the MCP SDK.
+
 ## Troubleshooting
 
 **Hammer icon not showing in Claude Desktop:**
@@ -204,6 +346,16 @@ The MCP server wraps `atem-connection` methods as MCP tools that Claude (or any 
 - Try pinging the ATEM IP from terminal
 - Default ATEM port is 9910 (UDP)
 - Make sure ATEM Software Control isn't blocking the connection
+
+**claude.ai connector shows auth error:**
+- Check Cloudflare "Block AI training bots" is set to "Do not block" (see [Cloudflare section](#critical-disable-cloudflare-ai-bot-blocking))
+- Check **Security > Analytics > Events** in Cloudflare dashboard for blocked requests
+- Verify `BASE_URL` matches your public tunnel URL exactly
+- Test with `curl -X POST https://your-url/mcp` — should return 401 JSON (not 403 HTML)
+
+**HTTP server returns 406 Not Acceptable:**
+- The MCP SDK requires `Accept: application/json, text/event-stream` but some clients send `Accept: */*`
+- The server includes a built-in workaround that patches the Accept header at the raw HTTP level
 
 **Commands not working:**
 - Some features require specific ATEM models (e.g., streaming/recording on Mini Pro+)
