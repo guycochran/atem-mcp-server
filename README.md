@@ -211,6 +211,9 @@ The MCP server wraps `atem-connection` methods as MCP tools that Claude (or any 
 
 ## Credits
 
+* **Guy Cochran** ([Office Hours Global](https://officehours.global)) — Creator and project lead
+* **Claude** by [Anthropic](https://anthropic.com) — AI pair-programming partner
+
 - **atem-connection** by [NRK (Norwegian Broadcasting Corporation)](https://github.com/nrkno/sofie-atem-connection) — the ATEM protocol library
 - **MCP TypeScript SDK** by [Anthropic](https://github.com/modelcontextprotocol/typescript-sdk)
 
