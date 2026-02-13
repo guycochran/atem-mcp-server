@@ -1,0 +1,23 @@
+{
+  "name": "atem-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for controlling Blackmagic ATEM video switchers via AI assistants",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch"
+  },
+  "keywords": ["mcp", "atem", "blackmagic", "video-switcher", "live-production"],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "atem-connection": "^3.8.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0"
+  }
+}
