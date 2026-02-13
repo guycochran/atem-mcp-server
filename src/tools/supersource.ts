@@ -6,10 +6,22 @@ import { Enums } from 'atem-connection';
 // ---------------------------------------------------------------------------
 // Preset layouts for Super Source
 // ---------------------------------------------------------------------------
-// Coordinate system: x/y range roughly -4800 to 4800 (0 = center)
-// Size: 0-1000 (1000 = full frame, 500 = half)
-// Crop: 0-18000 (0 = none, 18000 = fully cropped)
-// These values are tuned for 16:9 output and may need minor adjustment per model.
+// Coordinate system (atem-connection library values, 16:9 output):
+//   Position x, y: -4800 to 4800 (0 = center of frame)
+//   Size: 0-1000 (1000 = full frame 1920×1080, 500 = half 960×540)
+//   Crop: 0-18000 per edge (crop_value / 10 = position units removed)
+//
+// At size S, the box spans:
+//   half-width  = 1600 × S / 1000   (full frame half-width = 1600)
+//   half-height =  900 × S / 1000   (full frame half-height = 900)
+//
+// The full visible frame spans x: -1600 to +1600, y: -900 to +900.
+//
+// Layout math:
+//   side_by_side: size=1000 boxes cropped to half-width, positioned at ±800
+//   grid_2x2:    size=500 boxes (exactly quarter-frame), no crop needed
+//   three_up:    left half = cropped size=1000, right half = two size=500 boxes
+//   pip:         size=1000 background + size=250 overlay in corner
 
 interface BoxLayout {
   enabled: boolean;
@@ -25,65 +37,76 @@ interface BoxLayout {
 
 const PRESETS: Record<string, { description: string; boxes: BoxLayout[] }> = {
   side_by_side: {
-    description: 'Two equal boxes side by side (boxes 1-2)',
+    description: 'Two equal boxes side by side filling the frame (boxes 1-2). Each source is center-cropped to fill its half.',
     boxes: [
-      { enabled: true, x: -480, y: 0, size: 500, cropped: true, cropTop: 0, cropBottom: 0, cropLeft: 3200, cropRight: 3200 },
-      { enabled: true, x: 480, y: 0, size: 500, cropped: true, cropTop: 0, cropBottom: 0, cropLeft: 3200, cropRight: 3200 },
+      // Left half: x=-800 centers in left half, crop removes outer quarters of source
+      { enabled: true, x: -800, y: 0, size: 1000, cropped: true, cropTop: 0, cropBottom: 0, cropLeft: 8000, cropRight: 8000 },
+      // Right half: x=+800 centers in right half
+      { enabled: true, x: 800, y: 0, size: 1000, cropped: true, cropTop: 0, cropBottom: 0, cropLeft: 8000, cropRight: 8000 },
       { enabled: false, x: 0, y: 0, size: 500, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
       { enabled: false, x: 0, y: 0, size: 500, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
     ]
   },
   pip_bottom_right: {
-    description: 'Full-screen background with small PiP in bottom-right (boxes 1-2)',
+    description: 'Full-screen background with small PiP in bottom-right corner (boxes 1-2)',
     boxes: [
+      // Background: full frame
       { enabled: true, x: 0, y: 0, size: 1000, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
-      { enabled: true, x: 1080, y: -600, size: 250, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
+      // PiP: size=250 (quarter scale) snapped to bottom-right corner
+      { enabled: true, x: 1200, y: -675, size: 250, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
       { enabled: false, x: 0, y: 0, size: 500, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
       { enabled: false, x: 0, y: 0, size: 500, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
     ]
   },
   pip_bottom_left: {
-    description: 'Full-screen background with small PiP in bottom-left (boxes 1-2)',
+    description: 'Full-screen background with small PiP in bottom-left corner (boxes 1-2)',
     boxes: [
       { enabled: true, x: 0, y: 0, size: 1000, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
-      { enabled: true, x: -1080, y: -600, size: 250, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
+      { enabled: true, x: -1200, y: -675, size: 250, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
       { enabled: false, x: 0, y: 0, size: 500, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
       { enabled: false, x: 0, y: 0, size: 500, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
     ]
   },
   pip_top_right: {
-    description: 'Full-screen background with small PiP in top-right (boxes 1-2)',
+    description: 'Full-screen background with small PiP in top-right corner (boxes 1-2)',
     boxes: [
       { enabled: true, x: 0, y: 0, size: 1000, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
-      { enabled: true, x: 1080, y: 600, size: 250, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
+      { enabled: true, x: 1200, y: 675, size: 250, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
       { enabled: false, x: 0, y: 0, size: 500, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
       { enabled: false, x: 0, y: 0, size: 500, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
     ]
   },
   pip_top_left: {
-    description: 'Full-screen background with small PiP in top-left (boxes 1-2)',
+    description: 'Full-screen background with small PiP in top-left corner (boxes 1-2)',
     boxes: [
       { enabled: true, x: 0, y: 0, size: 1000, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
-      { enabled: true, x: -1080, y: 600, size: 250, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
+      { enabled: true, x: -1200, y: 675, size: 250, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
       { enabled: false, x: 0, y: 0, size: 500, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
       { enabled: false, x: 0, y: 0, size: 500, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
     ]
   },
   grid_2x2: {
-    description: 'Four equal boxes in a 2x2 grid (all 4 boxes)',
+    description: 'Four equal boxes in a 2×2 grid filling the frame (all 4 boxes). Each source shown at 50% scale, full 16:9, no crop.',
     boxes: [
-      { enabled: true, x: -480, y: 270, size: 500, cropped: true, cropTop: 0, cropBottom: 0, cropLeft: 3200, cropRight: 3200 },
-      { enabled: true, x: 480, y: 270, size: 500, cropped: true, cropTop: 0, cropBottom: 0, cropLeft: 3200, cropRight: 3200 },
-      { enabled: true, x: -480, y: -270, size: 500, cropped: true, cropTop: 0, cropBottom: 0, cropLeft: 3200, cropRight: 3200 },
-      { enabled: true, x: 480, y: -270, size: 500, cropped: true, cropTop: 0, cropBottom: 0, cropLeft: 3200, cropRight: 3200 },
+      // Top-left: edges x[-1600,0] y[0,900]
+      { enabled: true, x: -800, y: 450, size: 500, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
+      // Top-right: edges x[0,1600] y[0,900]
+      { enabled: true, x: 800, y: 450, size: 500, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
+      // Bottom-left: edges x[-1600,0] y[-900,0]
+      { enabled: true, x: -800, y: -450, size: 500, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
+      // Bottom-right: edges x[0,1600] y[-900,0]
+      { enabled: true, x: 800, y: -450, size: 500, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
     ]
   },
   three_up: {
-    description: 'One large box on left, two stacked on right (boxes 1-3)',
+    description: 'One large box on left half, two stacked boxes on right half (boxes 1-3). Left source is center-cropped, right sources shown at 50% scale.',
     boxes: [
-      { enabled: true, x: -480, y: 0, size: 500, cropped: true, cropTop: 0, cropBottom: 0, cropLeft: 3200, cropRight: 3200 },
-      { enabled: true, x: 480, y: 270, size: 250, cropped: true, cropTop: 0, cropBottom: 0, cropLeft: 1600, cropRight: 1600 },
-      { enabled: true, x: 480, y: -270, size: 250, cropped: true, cropTop: 0, cropBottom: 0, cropLeft: 1600, cropRight: 1600 },
+      // Left half: same as side_by_side left box
+      { enabled: true, x: -800, y: 0, size: 1000, cropped: true, cropTop: 0, cropBottom: 0, cropLeft: 8000, cropRight: 8000 },
+      // Top-right quarter: edges x[0,1600] y[0,900]
+      { enabled: true, x: 800, y: 450, size: 500, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
+      // Bottom-right quarter: edges x[0,1600] y[-900,0]
+      { enabled: true, x: 800, y: -450, size: 500, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
       { enabled: false, x: 0, y: 0, size: 500, cropped: false, cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0 },
     ]
   },
