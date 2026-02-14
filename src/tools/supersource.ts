@@ -118,7 +118,10 @@ const PRESETS: Record<string, { description: string; boxes: BoxLayout[] }> = {
 // Tool registration
 // ---------------------------------------------------------------------------
 
-export function registerSuperSourceTools(server: McpServer): void {
+export function registerSuperSourceTools(server: McpServer, mode: 'basic' | 'full' = 'full'): void {
+
+  // ── Full-only builder tools ─────────────────────────────────────────────
+  if (mode === 'full') {
 
   // ── Tool 1: Get Super Source State ──────────────────────────────────────
 
@@ -509,6 +512,8 @@ Args:
     }
   );
 
+  } // end full-only builder tools (tools 1-5)
+
   // ── Tool 6: Go Gallery ──────────────────────────────────────────────────
   // Sets up a 2x2 grid with the host + 3 guests, prioritizing active speakers
   // based on real-time audio levels from the Fairlight mixer.
@@ -860,6 +865,9 @@ Returns: running state, monitored inputs, hold time, transition type, current sp
     }
   );
 
+  // ── Full-only look builder tools ──────────────────────────────────────────
+  if (mode === 'full') {
+
   // ── Tool 11: Save Look ───────────────────────────────────────────────────
   // Snapshots the current Super Source state and saves it as a named "look"
   // that can be recalled later.
@@ -1034,6 +1042,8 @@ Examples:
       };
     }
   );
+
+  } // end full-only save look
 
   // ── Tool 12: Load Look ───────────────────────────────────────────────────
   // Recalls a saved look and applies it to the Super Source.
@@ -1298,7 +1308,8 @@ Looks are stored in ~/.atem-mcp/looks/ as JSON files.`,
     }
   );
 
-  // ── Tool 14: Delete Look ─────────────────────────────────────────────────
+  // ── Full-only: Delete Look ────────────────────────────────────────────────
+  if (mode === 'full') {
 
   server.registerTool(
     'atem_delete_look',
@@ -1330,4 +1341,6 @@ Args:
       return { content: [{ type: 'text', text: `Look "${name}" not found. ${available}` }] };
     }
   );
+
+  } // end full-only delete look
 }

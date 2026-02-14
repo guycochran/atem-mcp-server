@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { getAtem } from '../services/atem-connection.js';
 import { Enums } from 'atem-connection';
 
-export function registerTransitionTools(server: McpServer): void {
+export function registerTransitionTools(server: McpServer, mode: 'basic' | 'full' = 'full'): void {
 
   server.registerTool(
     'atem_set_transition_style',
@@ -84,6 +84,8 @@ Args:
       return { content: [{ type: 'text', text: `${style.toUpperCase()} transition rate set to ${rate} frames on ME${me + 1}` }] };
     }
   );
+
+  if (mode === 'full') {
 
   server.registerTool(
     'atem_set_transition_position',
@@ -166,4 +168,6 @@ Returns: JSON with current transition style, rates per type, and whether a trans
       return { content: [{ type: 'text', text: JSON.stringify(transitionState, null, 2) }] };
     }
   );
+
+  } // end if (mode === 'full')
 }

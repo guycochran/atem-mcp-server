@@ -2,7 +2,9 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { getAtem } from '../services/atem-connection.js';
 
-export function registerMacroTools(server: McpServer): void {
+export function registerMacroTools(server: McpServer, mode: 'basic' | 'full' = 'full'): void {
+
+  if (mode !== 'full') return;
 
   server.registerTool(
     'atem_macro_run',

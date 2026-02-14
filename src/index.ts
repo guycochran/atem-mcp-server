@@ -19,17 +19,26 @@ import { registerFairlightTools } from './tools/fairlight.js';
 
 const validTokens = new Set<string>();
 
+const toolMode: 'basic' | 'full' = process.env.TOOLS === 'basic' ? 'basic' : 'full';
+
 function createServer(): McpServer {
   const server = new McpServer({ name: 'atem-mcp-server', version: '1.5.0' });
-  registerConnectionTools(server);
-  registerSwitchingTools(server);
-  registerTransitionTools(server);
-  registerRoutingTools(server);
-  registerMacroTools(server);
-  registerRecordingStreamingTools(server);
-  registerAudioTools(server);
-  registerSuperSourceTools(server);
-  registerFairlightTools(server);
+
+  // Always registered (basic + full)
+  registerConnectionTools(server);          // 3 tools
+  registerSwitchingTools(server);           // 6 tools
+  registerTransitionTools(server, toolMode);// basic: 2, full: 4
+  registerRecordingStreamingTools(server);  // 5 tools
+  registerSuperSourceTools(server, toolMode);// basic: 7, full: 14
+
+  // Full-only tool groups
+  if (toolMode === 'full') {
+    registerRoutingTools(server);           // 11 tools
+    registerMacroTools(server, toolMode);   // 4 tools
+    registerAudioTools(server);             // 3 tools
+    registerFairlightTools(server);         // 12 tools
+  }
+
   return server;
 }
 
@@ -48,7 +57,7 @@ async function runStdio(): Promise<void> {
   autoConnect();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('[atem-mcp] ATEM MCP Server running on stdio');
+  console.error(`[atem-mcp] ATEM MCP Server running on stdio | tools: ${toolMode}`);
 }
 
 async function runHTTP(): Promise<void> {
@@ -237,7 +246,7 @@ async function runHTTP(): Promise<void> {
   autoConnect();
   const port = parseInt(process.env.PORT || '3000');
   httpServer.listen(port, () => {
-    console.error(`[atem-mcp] v1.5.0 | http://localhost:${port}/mcp | OAuth: ${baseUrl}`);
+    console.error(`[atem-mcp] v1.5.0 | http://localhost:${port}/mcp | OAuth: ${baseUrl} | tools: ${toolMode}`);
   });
 }
 
