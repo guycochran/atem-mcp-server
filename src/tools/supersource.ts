@@ -1,9 +1,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getAtem, getInputName, getActiveInputsByAudioLevel, isLevelTrackingActive, startAutoSwitch, stopAutoSwitch, getAutoSwitchStatus } from '../services/atem-connection.js';
+import { getAtem, getInputName, getActiveInputsByAudioLevel, isLevelTrackingActive, startAutoSwitch, stopAutoSwitch, getAutoSwitchStatus, setPendingLookUSKs, activatePendingLookUSKs } from '../services/atem-connection.js';
 import { Enums } from 'atem-connection';
 import { saveLook, loadLook, listLooks, deleteLook, getLooksDir } from '../services/looks.js';
-import type { Look, LookBox, LookArt, LookBorder } from '../services/looks.js';
+import type { Look, LookBox, LookArt, LookBorder, LookUSK } from '../services/looks.js';
 
 // ---------------------------------------------------------------------------
 // Preset layouts for Super Source
@@ -679,6 +679,22 @@ Examples:
       const speaker = activeSpeakers[0];
       const speakerName = getInputName(speaker.input);
 
+      // If we're switching AWAY from Super Source, turn off any on-air USK DVEs
+      // (they're likely part of a multi-up layout like the 6-up and would overlay the single camera)
+      const currentProgram = atem.state?.video?.mixEffects?.[meIndex]?.programInput;
+      const leavingSuperSource = currentProgram === 6000 && speaker.input !== 6000;
+      const uskDropped: number[] = [];
+      if (leavingSuperSource) {
+        const keyers = atem.state?.video?.mixEffects?.[meIndex]?.upstreamKeyers ?? [];
+        for (let k = 0; k < keyers.length; k++) {
+          const keyer = keyers[k];
+          if (keyer?.onAir && keyer.mixEffectKeyType === 3 /* DVE */) {
+            await atem.setUpstreamKeyerOnAir(false, meIndex, k);
+            uskDropped.push(k + 1);
+          }
+        }
+      }
+
       // Set preview then transition, or hard cut
       if ((transition ?? 'cut') === 'auto') {
         await atem.changePreviewInput(speaker.input, meIndex);
@@ -687,10 +703,11 @@ Examples:
         await atem.changeProgramInput(speaker.input, meIndex);
       }
 
+      const uskNote = uskDropped.length > 0 ? ` | USK${uskDropped.join(',')} dropped` : '';
       return {
         content: [{
           type: 'text',
-          text: `Active speaker: ${speakerName} (input ${speaker.input}) — now on program${(transition ?? 'cut') === 'auto' ? ' (auto transition)' : ' (cut)'}`
+          text: `Active speaker: ${speakerName} (input ${speaker.input}) — now on program${(transition ?? 'cut') === 'auto' ? ' (auto transition)' : ' (cut)'}${uskNote}`
         }]
       };
     }
@@ -934,6 +951,64 @@ Examples:
         };
       }
 
+      // Snapshot upstream keyers (DVE overlays, keyer masks)
+      const upstreamKeyers: LookUSK[] = [];
+      const meState = atem.state?.video?.mixEffects?.[0];
+      if (meState?.upstreamKeyers) {
+        const typeNames: Record<number, string> = { 0: 'luma', 1: 'chroma', 2: 'pattern', 3: 'dve' };
+        for (let k = 0; k < meState.upstreamKeyers.length; k++) {
+          const keyer = meState.upstreamKeyers[k];
+          if (!keyer) continue;
+          // Only save keyers that are on-air or set to DVE type (likely part of the layout)
+          const keyType = keyer.mixEffectKeyType ?? 0;
+          if (!keyer.onAir && keyType !== 3) continue;
+
+          const uskData: LookUSK = {
+            usk: k,
+            type: typeNames[keyType] ?? 'luma',
+            flyEnabled: keyer.flyEnabled ?? false,
+            fillSource: keyer.fillSource ?? 0,
+            fillSourceName: getInputName(keyer.fillSource ?? 0),
+            onAir: keyer.onAir ?? false,
+          };
+
+          // Save DVE settings if type is DVE
+          if (keyType === 3 && keyer.dveSettings) {
+            const d = keyer.dveSettings;
+            uskData.dve = {
+              sizeX: d.sizeX ?? 500,
+              sizeY: d.sizeY ?? 500,
+              positionX: d.positionX ?? 0,
+              positionY: d.positionY ?? 0,
+              rotation: d.rotation ?? 0,
+              maskEnabled: d.maskEnabled ?? false,
+              maskTop: d.maskTop ?? 0,
+              maskBottom: d.maskBottom ?? 0,
+              maskLeft: d.maskLeft ?? 0,
+              maskRight: d.maskRight ?? 0,
+              borderEnabled: d.borderEnabled ?? false,
+              borderOuterWidth: d.borderOuterWidth ?? 0,
+              borderInnerWidth: d.borderInnerWidth ?? 0,
+              shadowEnabled: d.shadowEnabled ?? false,
+            };
+          }
+
+          // Save keyer mask (screen-space clip)
+          if (keyer.maskSettings) {
+            const m = keyer.maskSettings;
+            uskData.keyerMask = {
+              maskEnabled: m.maskEnabled ?? false,
+              maskTop: m.maskTop ?? 9000,
+              maskBottom: m.maskBottom ?? -9000,
+              maskLeft: m.maskLeft ?? -16000,
+              maskRight: m.maskRight ?? 16000,
+            };
+          }
+
+          upstreamKeyers.push(uskData);
+        }
+      }
+
       const look: Look = {
         name,
         description,
@@ -941,6 +1016,7 @@ Examples:
         boxes,
         art,
         border,
+        upstreamKeyers: upstreamKeyers.length > 0 ? upstreamKeyers : undefined,
       };
 
       const filePath = await saveLook(look);
@@ -1078,7 +1154,93 @@ Examples:
         }, id);
       }
 
-      // Optionally cut to Super Source
+      // Apply upstream keyer settings (DVE overlays, keyer masks)
+      // Smart on-air behaviour: if program is NOT Super Source, configure
+      // the USKs but keep them off air so they don't overlay the current
+      // program.  They'll be brought on air when we go live to SSRC.
+      const uskResults: string[] = [];
+      const pendingUskOnAir: number[] = [];
+      const currentProgram = atem.state?.video?.mixEffects?.[0]?.programInput;
+      const programIsSuperSource = currentProgram === 6000;
+
+      if (look.upstreamKeyers && look.upstreamKeyers.length > 0) {
+        const { Enums } = await import('atem-connection');
+        const typeMap: Record<string, number> = {
+          luma: Enums.MixEffectKeyType.Luma,
+          chroma: Enums.MixEffectKeyType.Chroma,
+          pattern: Enums.MixEffectKeyType.Pattern,
+          dve: Enums.MixEffectKeyType.DVE,
+        };
+
+        for (const usk of look.upstreamKeyers) {
+          const me = 0;
+          const k = usk.usk;
+
+          // Set type
+          const keyType = typeMap[usk.type] ?? 0;
+          const fly = usk.flyEnabled ?? (usk.type === 'dve');
+          await atem.setUpstreamKeyerType({ mixEffectKeyType: keyType, flyEnabled: fly }, me, k);
+
+          // Set fill source (use override from sources array if applicable)
+          const fillSrc = usk.fillSource;
+          await atem.setUpstreamKeyerFillSource(fillSrc, me, k);
+
+          // Set DVE settings
+          if (usk.dve) {
+            await atem.setUpstreamKeyerDVESettings({
+              sizeX: usk.dve.sizeX,
+              sizeY: usk.dve.sizeY,
+              positionX: usk.dve.positionX,
+              positionY: usk.dve.positionY,
+              rotation: usk.dve.rotation ?? 0,
+              maskEnabled: usk.dve.maskEnabled,
+              maskTop: usk.dve.maskTop ?? 0,
+              maskBottom: usk.dve.maskBottom ?? 0,
+              maskLeft: usk.dve.maskLeft ?? 0,
+              maskRight: usk.dve.maskRight ?? 0,
+              borderEnabled: usk.dve.borderEnabled ?? false,
+              borderOuterWidth: usk.dve.borderOuterWidth ?? 0,
+              borderInnerWidth: usk.dve.borderInnerWidth ?? 0,
+              shadowEnabled: usk.dve.shadowEnabled ?? false,
+            } as any, me, k);
+          }
+
+          // Set keyer mask (screen-space clip)
+          if (usk.keyerMask) {
+            await atem.setUpstreamKeyerMaskSettings({
+              maskEnabled: usk.keyerMask.maskEnabled,
+              maskTop: usk.keyerMask.maskTop,
+              maskBottom: usk.keyerMask.maskBottom,
+              maskLeft: usk.keyerMask.maskLeft,
+              maskRight: usk.keyerMask.maskRight,
+            }, me, k);
+          }
+
+          // On-air logic: only go on air immediately if program IS Super Source
+          // or if we're about to cut to Super Source (cutToProgram=true).
+          // Otherwise, keep off air — they'll be brought on when we go live.
+          const shouldGoOnAir = usk.onAir && (programIsSuperSource || cutToProgram);
+          if (shouldGoOnAir) {
+            await atem.setUpstreamKeyerOnAir(true, me, k);
+            uskResults.push(`USK${k + 1}: ${usk.type.toUpperCase()} ${getInputName(fillSrc)} (on air)`);
+          } else if (usk.onAir) {
+            // Configured but kept off air — will need to be brought on when going live
+            await atem.setUpstreamKeyerOnAir(false, me, k);
+            pendingUskOnAir.push(k);
+            uskResults.push(`USK${k + 1}: ${usk.type.toUpperCase()} ${getInputName(fillSrc)} (ready — off air until SSRC goes live)`);
+          } else {
+            await atem.setUpstreamKeyerOnAir(false, me, k);
+            uskResults.push(`USK${k + 1}: ${usk.type.toUpperCase()} ${getInputName(fillSrc)} (off)`);
+          }
+        }
+      }
+
+      // Store pending USKs so they can be brought on air when transitioning to SSRC
+      if (pendingUskOnAir.length > 0) {
+        setPendingLookUSKs(pendingUskOnAir);
+      }
+
+      // Optionally cut to Super Source (USKs already on air from above)
       if (cutToProgram) {
         await atem.changeProgramInput(6000);
       }
@@ -1090,6 +1252,7 @@ Examples:
             `  ${boxResults.join('\n  ')}` +
             (look.art ? '\n  Art: restored' : '') +
             (look.border ? '\n  Border: restored' : '') +
+            (uskResults.length > 0 ? `\n  ${uskResults.join('\n  ')}` : '') +
             (cutToProgram ? '\n  Super Source → Program' : '')
         }]
       };

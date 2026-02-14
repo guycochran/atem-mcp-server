@@ -52,6 +52,38 @@ export interface LookBorder {
   borderLightSourceAltitude: number;
 }
 
+export interface LookUSK {
+  usk: number;
+  type: string;           // 'luma' | 'chroma' | 'pattern' | 'dve'
+  flyEnabled: boolean;
+  fillSource: number;
+  fillSourceName?: string;
+  onAir: boolean;
+  dve?: {
+    sizeX: number;
+    sizeY: number;
+    positionX: number;
+    positionY: number;
+    rotation?: number;
+    maskEnabled: boolean;
+    maskTop?: number;
+    maskBottom?: number;
+    maskLeft?: number;
+    maskRight?: number;
+    borderEnabled?: boolean;
+    borderOuterWidth?: number;
+    borderInnerWidth?: number;
+    shadowEnabled?: boolean;
+  };
+  keyerMask?: {
+    maskEnabled: boolean;
+    maskTop: number;
+    maskBottom: number;
+    maskLeft: number;
+    maskRight: number;
+  };
+}
+
 export interface Look {
   name: string;
   description?: string;
@@ -59,6 +91,7 @@ export interface Look {
   boxes: LookBox[];
   art?: LookArt;
   border?: LookBorder;
+  upstreamKeyers?: LookUSK[];
 }
 
 /** Ensure the looks directory exists */

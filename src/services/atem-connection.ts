@@ -334,6 +334,22 @@ export function startAutoSwitch(options: {
 
       const name = getInputName(loudestInput);
 
+      // Helper: drop on-air USK DVEs when leaving Super Source
+      const dropUSKsIfLeavingSuperSource = async (targetInput: number) => {
+        const currentPgm = atemInstance!.state?.video?.mixEffects?.[me]?.programInput;
+        if (currentPgm === 6000 && targetInput !== 6000) {
+          const keyers = atemInstance!.state?.video?.mixEffects?.[me]?.upstreamKeyers ?? [];
+          for (let k = 0; k < keyers.length; k++) {
+            const keyer = keyers[k];
+            if (keyer?.onAir && keyer.mixEffectKeyType === 3 /* DVE */) {
+              atemInstance!.setUpstreamKeyerOnAir(false, me, k)
+                .catch((e: unknown) => console.error(`[auto-switch] USK${k + 1} drop error:`, e));
+              console.error(`[auto-switch] Dropped USK${k + 1} (DVE) — leaving Super Source`);
+            }
+          }
+        }
+      };
+
       if (mode === 'host_ssrc') {
         // Host + Super Source hybrid mode:
         //   Host talking → full-screen host on program
@@ -341,6 +357,7 @@ export function startAutoSwitch(options: {
         const isHost = loudestInput === host;
         if (isHost) {
           console.error(`[auto-switch:host_ssrc] HOST full-screen → ${name} (input ${loudestInput}) [switch #${state.switchCount}]`);
+          dropUSKsIfLeavingSuperSource(loudestInput);
           atemInstance.changeProgramInput(loudestInput, me)
             .catch((e) => console.error('[auto-switch:host_ssrc] program error:', e));
         } else {
@@ -348,18 +365,28 @@ export function startAutoSwitch(options: {
           // Update the Super Source box with the active guest
           atemInstance.setSuperSourceBoxSettings({ source: loudestInput }, ssrcBox, ssrcId)
             .catch((e) => console.error('[auto-switch:host_ssrc] box update error:', e));
+          // Bring on any pending look USKs before switching to SSRC
+          activatePendingLookUSKs(me)
+            .catch((e: unknown) => console.error('[auto-switch:host_ssrc] pending USK error:', e));
           // Cut program to Super Source (6000) so the side-by-side is visible
           atemInstance.changeProgramInput(6000, me)
             .catch((e) => console.error('[auto-switch:host_ssrc] program→ssrc error:', e));
         }
       } else if (mode === 'ssrc_box') {
-        // Super Source box mode — update the box source instead of program
+        // Super Source box mode — update the box source instead of program.
+        // GUARD: Never put the host in the guest box (prevents duplicate).
+        if (loudestInput === host) {
+          console.error(`[auto-switch:ssrc] Skipping — host (input ${loudestInput}) is already in box 1, won't duplicate into box ${ssrcBox + 1}`);
+          state.switchCount--; // undo the count since we're skipping
+          return;
+        }
         console.error(`[auto-switch:ssrc] Box ${ssrcBox + 1} → ${name} (input ${loudestInput}) [switch #${state.switchCount}]`);
         atemInstance.setSuperSourceBoxSettings({ source: loudestInput }, ssrcBox, ssrcId)
           .catch((e) => console.error('[auto-switch:ssrc] box update error:', e));
       } else {
         // Program mode — switch full-screen camera
         console.error(`[auto-switch] → ${name} (input ${loudestInput}) [switch #${state.switchCount}]`);
+        dropUSKsIfLeavingSuperSource(loudestInput);
         if (transition === 'auto') {
           atemInstance.changePreviewInput(loudestInput, me)
             .then(() => atemInstance!.autoTransition(me))
@@ -435,6 +462,47 @@ export function getAutoSwitchStatus(): {
     mode: autoSwitch.mode,
     ssrcBox: (autoSwitch.mode === 'ssrc_box' || autoSwitch.mode === 'host_ssrc') ? autoSwitch.ssrcBox : undefined,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Pending USK on-air state for looks loaded into preview
+// ---------------------------------------------------------------------------
+// When a look with USK DVEs is loaded while program is NOT Super Source,
+// the USKs are configured but kept off air.  Their indices are stored here
+// so that when we transition to Super Source they can be brought on air.
+
+let _pendingLookUSKs: number[] = [];
+
+/** Store USK indices that should go on air when SSRC goes live */
+export function setPendingLookUSKs(usks: number[]): void {
+  _pendingLookUSKs = [...usks];
+}
+
+/** Get and clear the pending USK list (consume once) */
+export function consumePendingLookUSKs(): number[] {
+  const usks = [..._pendingLookUSKs];
+  _pendingLookUSKs = [];
+  return usks;
+}
+
+/** Check if there are pending USKs */
+export function hasPendingLookUSKs(): boolean {
+  return _pendingLookUSKs.length > 0;
+}
+
+/** Bring any pending look USKs on air (call when transitioning to SSRC) */
+export async function activatePendingLookUSKs(me: number = 0): Promise<number[]> {
+  const usks = consumePendingLookUSKs();
+  if (usks.length === 0 || !atemInstance) return [];
+  for (const k of usks) {
+    try {
+      await atemInstance.setUpstreamKeyerOnAir(true, me, k);
+      console.error(`[looks] USK${k + 1} brought on air (pending from look load)`);
+    } catch (e) {
+      console.error(`[looks] USK${k + 1} on-air error:`, e);
+    }
+  }
+  return usks;
 }
 
 export function getAtem(): Atem {
